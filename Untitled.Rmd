@@ -30,6 +30,11 @@ options(dplyr.summarise.inform = FALSE)
 
 # 0) Setup: Packages & Options
 
+The first step in any reproducible analysis is to load the libraries we
+depend on and establish chunk options that keep the notebook output
+clean. Doing this up front avoids repeated `library()` calls later and
+makes it obvious which packages are required to knit the document.
+
 ```{r packages}
 #If needed, uncomment to install:
 #install.packages(c(
@@ -56,11 +61,22 @@ library(ranger)
 
 > Place the competition CSVs in a local folder, e.g., `data/`.
 
+Before importing anything we set a single path variable pointing to the
+directory that holds the Kaggle CSVs. Centralizing the location makes it
+easy to rerun the notebook on a different machine or folder structure by
+changing only one line.
+
 ```{r paths}
 path <- "data"  # <-- change if your files live elsewhere
 ```
 
 # 1) Load & Inspect Data
+
+With the environment prepared, we load each competition file using
+`data.table::fread()` for speed and immediately convert them to
+data.table objects. Running structural summaries right after import
+verifies column types, catches missing values, and gives a first sense of
+the data volume.
 
 ```{r load-inspect}
 train <- fread(file.path(path,"train.csv"))           
@@ -78,6 +94,12 @@ skimr::skim(as.data.frame(train))
 ```
 
 # 2) Cleaning & Safe Joins (No Leakage)
+
+To avoid subtle leakage we normalize all key tables before merging:
+standardizing date formats, preparing holiday flags, smoothing oil
+prices, and aggregating transactions. These curated tables are the
+foundation for feature engineering and keep the joins strictly
+time-aligned.
 
 ```{r clean-join}
 # Parse dates with data.table :=
@@ -139,6 +161,11 @@ test[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
 
 # 3) EDA: Trend, Seasonality, Missingness
 
+Before engineering features we visualize aggregate trends, day-of-week
+seasonality, and missing values. These plots ground the modeling choices
+by confirming recurring weekly patterns and identifying any data quality
+issues that need to be addressed.
+
 ```{r eda}
 # Overall trend
 as_tibble(train) %>%
@@ -162,6 +189,11 @@ sapply(train, \(x) sum(is.na(x)))
 ```
 
 # 4) Feature Engineering (Date Parts, Lags, Rollings)
+
+The seasonal dynamics of grocery sales are driven by both calendar
+effects and recent history. We therefore add explicit date parts along
+with per-series lag and rolling statistics so downstream models can learn
+about weekly cycles and recent momentum.
 
 ```{r features}
 # Add date parts & categorical encodings
@@ -203,6 +235,11 @@ train[, `:=`(
 
 # 5) Time-Based Validation Split
 
+Rather than shuffling observations we carve out the final 16 days as a
+validation window to mimic the competition horizon. This time-respecting
+split provides a realistic check on how the model will perform on the
+future dates we ultimately need to forecast.
+
 ```{r split}
 H <- 16  # horizon
 max_train_date <- max(train$date)
@@ -215,6 +252,11 @@ list(train_rows = nrow(train_fit), valid_rows = nrow(valid_fit))
 ```
 
 # 6) Baseline: ARIMA & ETS (Single-Series Example)
+
+To ground expectations we fit classic univariate baselines—ARIMA and
+ETS—on a representative store-family series. Measuring their 16-day
+forecast accuracy gives us a benchmark to beat with more expressive
+global models.
 
 ```{r baseline-ts}
 one_series <- as_tibble(train) %>%
@@ -237,6 +279,11 @@ tibble(
 ```
 
 # 7) Global Supervised Model: XGBoost (with Recipe)
+
+With single-series baselines in place, we move to a global model that can
+share information across all stores and product families. We start by
+selecting engineered predictors, log-transforming the target, and setting
+up a `{recipes}` pipeline so the preprocessing is reproducible.
 
 ```{r ml-prep}
 model_cols <- c("onpromotion","dcoilwtico","is_holiday","transactions",
@@ -273,6 +320,11 @@ X_valid <- bake(prep_rec, new_data = valid_ids) %>% select(-y)
 y_valid <- bake(prep_rec, new_data = valid_ids) %>% pull(y)
 ```
 
+After baking the recipe we train an XGBoost model, monitoring validation
+RMSE via an explicit watchlist and using early stopping to control model
+complexity. This gradient-boosted tree ensemble captures nonlinear
+relationships in the engineered feature space.
+
 ```{r xgb-train}
 dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
 dvalid <- xgb.DMatrix(data = as.matrix(X_valid), label = y_valid)
@@ -305,6 +357,11 @@ val_rmse
 You can explore `keras` (LSTM/GRU) later by preparing sequence windows per series and fitting a 3D tensor model. Start with the global XGBoost above for a strong baseline.
 
 # 9) Refit on Full Train & Prepare Test Features
+
+Once satisfied with validation performance we refit on all available
+training data. We copy forward the most recent lagged values for each
+store-family pair so the model receives familiar inputs when generating
+predictions for the unseen test dates.
 
 ```{r test-features}
 # Carry forward last known lag/rolling stats per (store, family)
@@ -353,6 +410,11 @@ pred_test <- pmax(0, expm1(pred_test_log))
 ```
 
 # 10) Submission CSV
+
+The last modeling step is to pair the predictions with their Kaggle ids
+and save a submission file. Automating this export inside the notebook
+ensures that anyone knitting the document can reproduce the exact CSV
+used for leaderboard scoring.
 
 ```{r submission}
 submission <- as_tibble(test) %>%
