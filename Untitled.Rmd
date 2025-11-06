@@ -45,7 +45,12 @@ required_packages <- c(
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
 
 if (length(missing_packages) > 0) {
-  install.packages(missing_packages)
+  cran_repo <- getOption("repos")
+  if (is.null(cran_repo) || identical(cran_repo, structure("@CRAN@", names = "CRAN")) || cran_repo["CRAN"] == "@CRAN@") {
+    options(repos = c(CRAN = "https://cloud.r-project.org"))
+  }
+
+  install.packages(missing_packages, dependencies = TRUE)
 }
 
 invisible(lapply(required_packages, library, character.only = TRUE))
