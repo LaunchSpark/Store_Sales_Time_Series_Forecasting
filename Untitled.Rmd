@@ -1,0 +1,357 @@
+Sweet—here’s a fresh **R Notebook (.Rmd)** with your fixes baked in:
+
+* Ensures `data.table` is active (`setDT()` before any `:=`)
+* Uses `lubridate::wday()` explicitly to avoid masking issues
+* Keeps the rest of the pipeline intact
+
+Copy this into a new file (e.g., `favorita_store_sales_fixed.Rmd`) and Knit.
+
+```yaml
+---
+title: "Kaggle: Store Sales – Time Series Forecasting (Fixed R Notebook)"
+author: "Your Name"
+date: "`r format(Sys.Date())`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(dplyr.summarise.inform = FALSE)
+```
+
+# 0) Setup: Packages & Options
+
+```{r packages}
+#If needed, uncomment to install:
+#install.packages(c(
+ # "tidyverse","data.table","lubridate","janitor","skimr",
+  #"tsibble","feasts","fable","forecast",
+  #"recipes","rsample","yardstick","xgboost","ranger"
+ #))
+
+library(tidyverse)
+library(data.table)   # for setDT, :=, frollmean
+library(lubridate)    # date parts; we'll use lubridate::wday explicitly
+library(janitor)
+library(skimr)
+library(tsibble)
+library(feasts)
+library(fable)
+library(forecast)
+library(recipes)
+library(rsample)
+library(yardstick)
+library(xgboost)
+library(ranger)
+```
+
+> Place the competition CSVs in a local folder, e.g., `data/`.
+
+```{r paths}
+path <- "data"  # <-- change if your files live elsewhere
+```
+
+# 1) Load & Inspect Data
+
+```{r load-inspect}
+train <- fread(file.path(path,"train.csv"))           
+test  <- fread(file.path(path,"test.csv"))            
+stores <- fread(file.path(path,"stores.csv"))         
+oil    <- fread(file.path(path,"oil.csv"))            
+hol    <- fread(file.path(path,"holidays_events.csv"))
+trans  <- fread(file.path(path,"transactions.csv"))
+
+# Ensure data.table semantics are active BEFORE using :=
+setDT(train); setDT(test); setDT(stores); setDT(oil); setDT(hol); setDT(trans)
+
+str(train); str(test)
+skimr::skim(as.data.frame(train))
+```
+
+# 2) Cleaning & Safe Joins (No Leakage)
+
+```{r clean-join}
+# Parse dates with data.table :=
+train[, date := as.Date(date)]
+test[,  date := as.Date(date)]
+oil[,   date := as.Date(date)]
+hol[,   date := as.Date(date)]
+trans[, date := as.Date(date)]
+
+# Holidays: simple signal with transferred handled
+hol_clean <- as_tibble(hol) %>%
+  mutate(is_holiday_raw = 1L,
+         is_transferred = if_else(transferred == "True", 1L, 0L, missing = 0L)) %>%
+  transmute(date, is_holiday = if_else(is_transferred==1L, 0L, 1L))
+
+# Oil: forward-fill gaps
+oil_full <- tibble(date = seq(min(oil$date), max(oil$date), by = "day")) %>%
+  left_join(as_tibble(oil), by = "date") %>%
+  arrange(date) %>%
+  tidyr::fill(dcoilwtico, .direction = "down")
+
+# Join helper (use tibbles to join, then back to data.table)
+join_base <- function(df_dt) {
+  df <- as_tibble(df_dt) %>%
+    left_join(as_tibble(stores), by = "store_nbr") %>%
+    left_join(oil_full, by = "date") %>%
+    left_join(hol_clean, by = "date") %>%
+    left_join(as_tibble(trans), by = c("date","store_nbr")) %>%
+    clean_names()
+  setDT(df)  # return as data.table
+  df
+}
+
+train <- join_base(train)
+test  <- join_base(test)
+
+# NA handling (data.table :=)
+na_to0 <- c("onpromotion","dcoilwtico","is_holiday","transactions")
+train[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
+test[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
+```
+
+# 3) EDA: Trend, Seasonality, Missingness
+
+```{r eda}
+# Overall trend
+as_tibble(train) %>%
+  group_by(date) %>%
+  summarise(sales = sum(sales, na.rm=TRUE), .groups = "drop") %>%
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  labs(title="Total Sales Over Time", x = NULL, y = "Sales")
+
+# Day-of-week seasonality (explicitly call lubridate::wday to avoid masking)
+as_tibble(train) %>%
+  mutate(dow = lubridate::wday(date, label = TRUE)) %>%
+  group_by(dow) %>%
+  summarise(avg_sales = mean(sales, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(dow, avg_sales)) + 
+  geom_col() + 
+  labs(title="Average Sales by Day of Week", x = NULL, y = "Avg Sales")
+
+# Missing values snapshot
+sapply(train, \(x) sum(is.na(x)))
+```
+
+# 4) Feature Engineering (Date Parts, Lags, Rollings)
+
+```{r features}
+# Add date parts & categorical encodings
+make_features <- function(DT) {
+  DT[, `:=`(
+    year = year(date),
+    month = month(date),
+    mday = mday(date),
+    wday = wday(date),                  # numeric 1..7
+    week = isoweek(date),
+    is_weekend = as.integer(wday %in% c(1,7))  # Sunday=1
+  )]
+  # Convert to factors for recipe encoding later (keep as columns)
+  DT[, `:=`(
+    fam = as.factor(family),
+    city = as.factor(city),
+    state = as.factor(state),
+    type = as.factor(type),
+    cluster = as.factor(cluster)
+  )]
+  invisible(DT)
+}
+
+make_features(train)
+make_features(test)
+
+# Lags & rolling stats per (store_nbr, family)
+setkey(train, store_nbr, family, date)
+
+train[, `:=`(
+  lag7  = shift(sales, 7),
+  lag14 = shift(sales, 14),
+  lag28 = shift(sales, 28),
+  roll7  = frollmean(shift(sales,1), 7,  na.rm=TRUE),
+  roll28 = frollmean(shift(sales,1), 28, na.rm=TRUE),
+  roll56 = frollmean(shift(sales,1), 56, na.rm=TRUE)
+), by = .(store_nbr, family)]
+```
+
+# 5) Time-Based Validation Split
+
+```{r split}
+H <- 16  # horizon
+max_train_date <- max(train$date)
+valid_start <- max_train_date - lubridate::days(H-1)
+
+train_fit <- train[date <  valid_start]
+valid_fit <- train[date >= valid_start]
+
+list(train_rows = nrow(train_fit), valid_rows = nrow(valid_fit))
+```
+
+# 6) Baseline: ARIMA & ETS (Single-Series Example)
+
+```{r baseline-ts}
+one_series <- as_tibble(train) %>%
+  filter(store_nbr == 1, family == "GROCERY I") %>%
+  arrange(date)
+
+ts_one <- ts(one_series$sales, frequency = 7)
+fit_arima <- forecast::auto.arima(ts_one)
+fit_ets   <- forecast::ets(ts_one)
+
+actual_lastH <- tail(ts_one, H)
+fc_arima <- forecast::forecast(fit_arima, h=H)$mean
+fc_ets   <- forecast::forecast(fit_ets, h=H)$mean
+
+tibble(
+  model = c("ARIMA","ETS"),
+  RMSE  = c(sqrt(mean((fc_arima - actual_lastH)^2)),
+            sqrt(mean((fc_ets   - actual_lastH)^2)))
+)
+```
+
+# 7) Global Supervised Model: XGBoost (with Recipe)
+
+```{r ml-prep}
+model_cols <- c("onpromotion","dcoilwtico","is_holiday","transactions",
+                "year","month","mday","wday","week","is_weekend",
+                "lag7","lag14","lag28","roll7","roll28","roll56",
+                "store_nbr","family","city","state","type","cluster")
+
+model_df <- as_tibble(train) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+rec <- recipe(y ~ ., data = model_df) %>%
+  step_string2factor(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+prep_rec <- prep(rec)
+
+train_ids <- as_tibble(train_fit) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+valid_ids <- as_tibble(valid_fit) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+X_train <- bake(prep_rec, new_data = train_ids) %>% select(-y)
+y_train <- bake(prep_rec, new_data = train_ids) %>% pull(y)
+X_valid <- bake(prep_rec, new_data = valid_ids) %>% select(-y)
+y_valid <- bake(prep_rec, new_data = valid_ids) %>% pull(y)
+```
+
+```{r xgb-train}
+dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
+dvalid <- xgb.DMatrix(data = as.matrix(X_valid), label = y_valid)
+
+params <- list(
+  objective = "reg:squarederror",
+  eval_metric = "rmse",
+  max_depth = 8,
+  eta = 0.05,
+  subsample = 0.8,
+  colsample_bytree = 0.8
+)
+
+xgb_fit <- xgb.train(
+  params = params,
+  data   = dtrain,
+  nrounds = 1500,
+  watchlist = list(valid = dvalid),
+  early_stopping_rounds = 100,
+  print_every_n = 50
+)
+
+pred_valid <- predict(xgb_fit, dvalid)
+val_rmse <- yardstick::rmse_vec(truth = y_valid, estimate = pred_valid)
+val_rmse
+```
+
+# 8) (Optional) Deep Learning Notes
+
+You can explore `keras` (LSTM/GRU) later by preparing sequence windows per series and fitting a 3D tensor model. Start with the global XGBoost above for a strong baseline.
+
+# 9) Refit on Full Train & Prepare Test Features
+
+```{r test-features}
+# Carry forward last known lag/rolling stats per (store, family)
+last_train_feats <- as_tibble(train) %>%
+  arrange(store_nbr, family, date) %>%
+  group_by(store_nbr, family) %>%
+  summarise(
+    lag7_last  = dplyr::last(lag7,  order_by = date),
+    lag14_last = dplyr::last(lag14, order_by = date),
+    lag28_last = dplyr::last(lag28, order_by = date),
+    roll7_last  = dplyr::last(roll7,  order_by = date),
+    roll28_last = dplyr::last(roll28, order_by = date),
+    roll56_last = dplyr::last(roll56, order_by = date),
+    .groups = "drop"
+  ) %>% setDT()
+
+test2 <- copy(test)
+test2 <- merge(test2, last_train_feats, by = c("store_nbr","family"), all.x = TRUE)
+test2[, `:=`(
+  lag7  = lag7_last,  lag14 = lag14_last,  lag28 = lag28_last,
+  roll7 = roll7_last, roll28 = roll28_last, roll56 = roll56_last
+)]
+test2[, c("lag7_last","lag14_last","lag28_last","roll7_last","roll28_last","roll56_last") := NULL]
+
+# Same recipe processing
+test_baked <- bake(prep_rec, new_data = as_tibble(test2))
+
+# Refit on all usable training data
+train_all <- as_tibble(train) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+X_all <- bake(prep_rec, new_data = train_all) %>% select(-y)
+y_all <- bake(prep_rec, new_data = train_all) %>% pull(y)
+
+dall <- xgb.DMatrix(as.matrix(X_all), label = y_all)
+xgb_final <- xgb.train(
+  params = params,
+  data = dall,
+  nrounds = xgb_fit$best_iteration
+)
+
+pred_test_log <- predict(xgb_final, as.matrix(test_baked))
+pred_test <- pmax(0, expm1(pred_test_log))
+```
+
+# 10) Submission CSV
+
+```{r submission}
+submission <- as_tibble(test) %>%
+  select(id) %>%
+  mutate(sales = pred_test)
+
+fwrite(submission, "submission.csv")
+submission %>% head()
+```
+
+# 11) Iterate & Improve
+
+* Verify CV design (e.g., `rsample::rolling_origin`) to match the 16-day horizon.
+* Add richer holiday features (national vs regional, pre/post-holiday flags), family-specific models, or recursive lags for multi-step forecasting.
+* Consider stacking (ARIMA/ETS + XGB) or trying `{lightgbm}` / `{catboost}`.
+
+---
+
+If you want, I can also add a **rolling-origin CV** chunk so you can compare multiple folds automatically.
