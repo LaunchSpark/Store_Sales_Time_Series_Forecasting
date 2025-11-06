@@ -167,13 +167,13 @@ sapply(train, \(x) sum(is.na(x)))
 # Add date parts & categorical encodings
 make_features <- function(DT) {
   DT[, `:=`(
-    year = year(date),
-    month = month(date),
-    mday = mday(date),
-    wday = wday(date),                  # numeric 1..7
-    week = isoweek(date),
-    is_weekend = as.integer(wday %in% c(1,7))  # Sunday=1
+    year = lubridate::year(date),
+    month = lubridate::month(date),
+    mday = lubridate::mday(date),
+    wday = lubridate::wday(date),                  # numeric 1..7
+    week = lubridate::isoweek(date)
   )]
+  DT[, is_weekend := as.integer(wday %in% c(1L, 7L))]
   # Convert to factors for recipe encoding later (keep as columns)
   DT[, `:=`(
     fam = as.factor(family),
