@@ -36,27 +36,19 @@ clean. Doing this up front avoids repeated `library()` calls later and
 makes it obvious which packages are required to knit the document.
 
 ```{r packages}
-#If needed, uncomment to install:
-#install.packages(c(
- # "tidyverse","data.table","lubridate","janitor","skimr",
-  #"tsibble","feasts","fable","forecast",
-  #"recipes","rsample","yardstick","xgboost","ranger"
- #))
+required_packages <- c(
+  "tidyverse", "data.table", "lubridate", "janitor", "skimr",
+  "tsibble", "feasts", "fable", "forecast",
+  "recipes", "rsample", "yardstick", "xgboost", "ranger"
+)
 
-library(tidyverse)
-library(data.table)   # for setDT, :=, frollmean
-library(lubridate)    # date parts; we'll use lubridate::wday explicitly
-library(janitor)
-library(skimr)
-library(tsibble)
-library(feasts)
-library(fable)
-library(forecast)
-library(recipes)
-library(rsample)
-library(yardstick)
-library(xgboost)
-library(ranger)
+missing_packages <- setdiff(required_packages, rownames(installed.packages()))
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+invisible(lapply(required_packages, library, character.only = TRUE))
 ```
 
 > Place the competition CSVs in a local folder, e.g., `data/`.
