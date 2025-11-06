@@ -89,9 +89,12 @@ trans[, date := as.Date(date)]
 
 # Holidays: simple signal with transferred handled
 hol_clean <- as_tibble(hol) %>%
-  mutate(is_holiday_raw = 1L,
-         is_transferred = if_else(transferred == "True", 1L, 0L, missing = 0L)) %>%
-  transmute(date, is_holiday = if_else(is_transferred==1L, 0L, 1L))
+  mutate(is_transferred = if_else(transferred == "True", 1L, 0L, missing = 0L),
+         is_holiday     = if_else(is_transferred == 1L, 0L, 1L, missing = 0L)) %>%
+  group_by(date) %>%
+  summarise(is_holiday = as.integer(any(is_holiday == 1L)), .groups = "drop")
+
+stopifnot(nrow(hol_clean) == dplyr::n_distinct(hol_clean$date))
 
 # Oil: forward-fill gaps
 oil_full <- tibble(date = seq(min(oil$date), max(oil$date), by = "day")) %>%
@@ -99,13 +102,27 @@ oil_full <- tibble(date = seq(min(oil$date), max(oil$date), by = "day")) %>%
   arrange(date) %>%
   tidyr::fill(dcoilwtico, .direction = "down")
 
+oil_u <- oil_full %>% distinct(date, .keep_all = TRUE)
+
+stopifnot(nrow(oil_u) == dplyr::n_distinct(oil_u$date))
+
+trans_u <- as_tibble(trans) %>%
+  group_by(date, store_nbr) %>%
+  summarise(transactions = sum(transactions, na.rm = TRUE), .groups = "drop")
+
+stopifnot(nrow(trans_u) == dplyr::n_distinct(trans_u$date, trans_u$store_nbr))
+
+stores_u <- as_tibble(stores) %>% distinct(store_nbr, .keep_all = TRUE)
+
+stopifnot(nrow(stores_u) == dplyr::n_distinct(stores_u$store_nbr))
+
 # Join helper (use tibbles to join, then back to data.table)
 join_base <- function(df_dt) {
   df <- as_tibble(df_dt) %>%
-    left_join(as_tibble(stores), by = "store_nbr") %>%
-    left_join(oil_full, by = "date") %>%
-    left_join(hol_clean, by = "date") %>%
-    left_join(as_tibble(trans), by = c("date","store_nbr")) %>%
+    left_join(stores_u, by = "store_nbr", relationship = "many-to-one") %>%
+    left_join(oil_u, by = "date", relationship = "many-to-one") %>%
+    left_join(hol_clean, by = "date", relationship = "many-to-one") %>%
+    left_join(trans_u, by = c("date","store_nbr"), relationship = "many-to-one") %>%
     clean_names()
   setDT(df)  # return as data.table
   df
