@@ -36,24 +36,132 @@ clean. Doing this up front avoids repeated `library()` calls later and
 makes it obvious which packages are required to knit the document.
 
 ```{r packages}
-required_packages <- c(
-  "tidyverse", "data.table", "lubridate", "janitor", "skimr",
-  "tsibble", "feasts", "fable", "forecast",
-  "recipes", "rsample", "yardstick", "ranger"
+required_packages <- data.frame(
+  package = c(
+    "tidyverse", "data.table", "lubridate", "janitor", "skimr",
+    "tsibble", "feasts", "fable", "forecast",
+    "recipes", "rsample", "yardstick", "ranger"
+  ),
+  min_version = c(
+    "1.3.2", "1.14.10", "1.9.3", "2.2.0", "2.1.5",
+    "1.1.3", "0.3.2", "0.3.4", "8.23.0",
+    "1.0.10", "1.2.0", "1.2.0", "0.15.2"
+  ),
+  stringsAsFactors = FALSE
 )
 
-missing_packages <- setdiff(required_packages, rownames(installed.packages()))
-
-if (length(missing_packages) > 0) {
-  cran_repo <- getOption("repos")
-  if (is.null(cran_repo) || identical(cran_repo, structure("@CRAN@", names = "CRAN")) || cran_repo["CRAN"] == "@CRAN@") {
-    options(repos = c(CRAN = "https://cloud.r-project.org"))
-  }
-
-  install.packages(missing_packages, dependencies = TRUE)
+minimum_r_version <- "4.1.0"
+if (getRversion() < minimum_r_version) {
+  warning(
+    sprintf(
+      "R %s or later is recommended for this notebook; current version is %s.",
+      minimum_r_version,
+      getRversion()
+    )
+  )
 }
 
-invisible(lapply(required_packages, library, character.only = TRUE))
+cran_repo <- getOption("repos")
+if (
+  is.null(cran_repo) ||
+  identical(cran_repo, structure("@CRAN@", names = "CRAN")) ||
+  identical(unname(cran_repo["CRAN"]), "@CRAN@")
+) {
+  options(repos = c(CRAN = "https://cloud.r-project.org"))
+  message("[setup] CRAN mirror set to https://cloud.r-project.org")
+}
+
+package_report <- required_packages
+package_report$current_version <- NA_character_
+package_report$required_action <- "none"
+package_report$install_status <- "skipped"
+package_report$load_status <- "not attempted"
+
+for (i in seq_len(nrow(required_packages))) {
+  pkg <- required_packages$package[i]
+  min_ver <- required_packages$min_version[i]
+
+  current_version <- tryCatch(
+    as.character(utils::packageVersion(pkg)),
+    error = function(e) NA_character_
+  )
+  package_report$current_version[i] <- current_version
+
+  needs_install <- is.na(current_version)
+  needs_update <- !needs_install && utils::compareVersion(current_version, min_ver) < 0
+
+  if (needs_install) {
+    package_report$required_action[i] <- "install"
+  } else if (needs_update) {
+    package_report$required_action[i] <- "update"
+  } else {
+    package_report$install_status[i] <- "already satisfied"
+  }
+
+  if (needs_install || needs_update) {
+    action <- package_report$required_action[i]
+    installed_label <- if (is.na(current_version)) "none" else current_version
+    message(sprintf(
+      "[setup] Attempting to %s %s (installed: %s, required: %s)",
+      action, pkg, installed_label, min_ver
+    ))
+
+    install_success <- tryCatch(
+      {
+        utils::install.packages(pkg, dependencies = TRUE)
+        TRUE
+      },
+      error = function(e) {
+        message(sprintf("[setup][error] %s failed: %s", pkg, conditionMessage(e)))
+        FALSE
+      }
+    )
+
+    if (install_success) {
+      package_report$install_status[i] <- "success"
+      package_report$current_version[i] <- tryCatch(
+        as.character(utils::packageVersion(pkg)),
+        error = function(e) current_version
+      )
+    } else {
+      package_report$install_status[i] <- "failed"
+      next
+    }
+  }
+
+  load_status <- tryCatch(
+    {
+      suppressPackageStartupMessages(
+        library(pkg, character.only = TRUE)
+      )
+      "loaded"
+    },
+    error = function(e) {
+      message(sprintf("[setup][error] Failed to load %s: %s", pkg, conditionMessage(e)))
+      "load failed"
+    }
+  )
+  package_report$load_status[i] <- load_status
+}
+
+print(package_report, row.names = FALSE)
+
+# Provide a concise summary for the knitting log
+message("[setup] Package installation report:")
+for (i in seq_len(nrow(package_report))) {
+  row <- package_report[i, ]
+  message(sprintf(
+    "  - %s: current=%s | action=%s | install=%s | load=%s",
+    row$package,
+    row$current_version,
+    row$required_action,
+    row$install_status,
+    row$load_status
+  ))
+}
+
+rm(package_report)
+``` 
 ```
 
 > Place the competition CSVs in a local folder, e.g., `data/`.
