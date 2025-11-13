@@ -450,7 +450,7 @@ training and strong baselines.
 
 ```{r rf-train}
 set.seed(42)
-num_trees <- 100
+num_trees <- 30
 mtry_val <- floor(sqrt(ncol(train_processed) - 1))
 min_node <- 5
 sample_frac <- 0.8
@@ -461,7 +461,8 @@ rf_fit <- ranger(
   mtry = mtry_val,
   min.node.size = min_node,
   sample.fraction = sample_frac,
-  respect.unordered.factors = "order"
+  respect.unordered.factors = "order",
+  write.forest = TRUE
 )
 
 pred_valid <- predict(rf_fit, data = valid_processed)$predictions
