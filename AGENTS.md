@@ -25,8 +25,9 @@ This file applies to the entire repository. Follow these conventions whenever yo
    - After validation, the model is retrained on the full dataset with identical preprocessing steps.
    - Predictions for the competition `test` set are post-processed with `expm1()` and written to `submission.csv`.
 
+   
 ## Architecture notes
-- **Primary artifact**: A single R Markdown notebook (`Untitled.Rmd`) encapsulates the entire pipeline from ingestion to submission.
+- **Primary artifact**: A single R Markdown notebook (`Project_code.Rmd`) encapsulates the entire pipeline from ingestion to submission.
 - **Data handling**: `data.table` is favored for mutations; tidyverse tibbles are used when readability benefits outweigh conversion costs.
 - **Feature pipeline**: `recipes` defines the transformation graph, ensuring training, validation, and test matrices remain synchronized.
 - **Model abstraction**: The Random Forest is a modular component. Alternative models should expect the same preprocessed features and target (`y = log1p(sales)`).
@@ -36,3 +37,4 @@ This file applies to the entire repository. Follow these conventions whenever yo
 - Keep notebook sections self-contained and labeled with numeric prefixes to preserve the documented flow.
 - When adding new scripts or modules, update `README.md` with usage instructions and ensure file paths remain relative to the project root.
 - Prefer reproducible seeds and avoid writing raw Kaggle data to version control.
+- review the file `assignment_resources/assighnmentChecklist.md` and varify that either each section is complete, or that there are TODOs 
