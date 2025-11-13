@@ -39,7 +39,7 @@ makes it obvious which packages are required to knit the document.
 required_packages <- c(
   "tidyverse", "data.table", "lubridate", "janitor", "skimr",
   "tsibble", "feasts", "fable", "forecast",
-  "recipes", "rsample", "yardstick", "xgboost", "ranger"
+  "recipes", "rsample", "yardstick", "ranger"
 )
 
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
@@ -275,7 +275,7 @@ tibble(
 )
 ```
 
-# 7) Global Supervised Model: XGBoost (with Recipe)
+# 7) Global Supervised Model: Random Forest (with Recipe)
 
 With single-series baselines in place, we move to a global model that can
 share information across all stores and product families. We start by
@@ -311,47 +311,42 @@ valid_ids <- as_tibble(valid_fit) %>%
   mutate(y = log1p(sales)) %>%
   select(y, all_of(model_cols))
 
-X_train <- bake(prep_rec, new_data = train_ids) %>% select(-y)
-y_train <- bake(prep_rec, new_data = train_ids) %>% pull(y)
-X_valid <- bake(prep_rec, new_data = valid_ids) %>% select(-y)
-y_valid <- bake(prep_rec, new_data = valid_ids) %>% pull(y)
+train_processed <- bake(prep_rec, new_data = train_ids)
+valid_processed <- bake(prep_rec, new_data = valid_ids)
 ```
 
-After baking the recipe we train an XGBoost model, monitoring validation
-RMSE via an explicit watchlist and using early stopping to control model
-complexity. This gradient-boosted tree ensemble captures nonlinear
-relationships in the engineered feature space.
+After baking the recipe we train a random forest with `{ranger}` and
+evaluate its validation RMSE. Tree ensembles remain robust to nonlinear
+relationships in the engineered feature space while providing fast
+training and strong baselines.
 
-```{r xgb-train}
-dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
-dvalid <- xgb.DMatrix(data = as.matrix(X_valid), label = y_valid)
-
-params <- list(
-  objective = "reg:squarederror",
-  eval_metric = "rmse",
-  max_depth = 8,
-  eta = 0.05,
-  subsample = 0.8,
-  colsample_bytree = 0.8
+```{r rf-train}
+set.seed(42)
+num_trees <- 600
+mtry_val <- floor(sqrt(ncol(train_processed) - 1))
+min_node <- 5
+sample_frac <- 0.8
+rf_fit <- ranger(
+  formula = y ~ .,
+  data = train_processed,
+  num.trees = num_trees,
+  mtry = mtry_val,
+  min.node.size = min_node,
+  sample.fraction = sample_frac,
+  respect.unordered.factors = "order"
 )
 
-xgb_fit <- xgb.train(
-  params = params,
-  data   = dtrain,
-  nrounds = 1500,
-  watchlist = list(valid = dvalid),
-  early_stopping_rounds = 100,
-  print_every_n = 50
+pred_valid <- predict(rf_fit, data = valid_processed)$predictions
+val_rmse <- yardstick::rmse_vec(
+  truth = valid_processed$y,
+  estimate = pred_valid
 )
-
-pred_valid <- predict(xgb_fit, dvalid)
-val_rmse <- yardstick::rmse_vec(truth = y_valid, estimate = pred_valid)
 val_rmse
 ```
 
 # 8) (Optional) Deep Learning Notes
 
-You can explore `keras` (LSTM/GRU) later by preparing sequence windows per series and fitting a 3D tensor model. Start with the global XGBoost above for a strong baseline.
+You can explore `keras` (LSTM/GRU) later by preparing sequence windows per series and fitting a 3D tensor model. Start with the global Random Forest above for a strong baseline.
 
 # 9) Refit on Full Train & Prepare Test Features
 
@@ -392,17 +387,20 @@ train_all <- as_tibble(train) %>%
   mutate(y = log1p(sales)) %>%
   select(y, all_of(model_cols))
 
-X_all <- bake(prep_rec, new_data = train_all) %>% select(-y)
-y_all <- bake(prep_rec, new_data = train_all) %>% pull(y)
+train_all_processed <- bake(prep_rec, new_data = train_all)
 
-dall <- xgb.DMatrix(as.matrix(X_all), label = y_all)
-xgb_final <- xgb.train(
-  params = params,
-  data = dall,
-  nrounds = xgb_fit$best_iteration
+rf_final <- ranger(
+  formula = y ~ .,
+  data = train_all_processed,
+  num.trees = num_trees,
+  mtry = mtry_val,
+  min.node.size = min_node,
+  sample.fraction = 1,
+  respect.unordered.factors = "order",
+  seed = 42
 )
 
-pred_test_log <- predict(xgb_final, as.matrix(test_baked))
+pred_test_log <- predict(rf_final, data = test_baked)$predictions
 pred_test <- pmax(0, expm1(pred_test_log))
 ```
 
@@ -426,7 +424,7 @@ submission %>% head()
 
 * Verify CV design (e.g., `rsample::rolling_origin`) to match the 16-day horizon.
 * Add richer holiday features (national vs regional, pre/post-holiday flags), family-specific models, or recursive lags for multi-step forecasting.
-* Consider stacking (ARIMA/ETS + XGB) or trying `{lightgbm}` / `{catboost}`.
+* Consider stacking (ARIMA/ETS + Random Forest) or trying `{lightgbm}` / `{catboost}`.
 
 ---
 
