@@ -322,7 +322,7 @@ training and strong baselines.
 
 ```{r rf-train}
 set.seed(42)
-num_trees <- 600
+num_trees <- 100
 mtry_val <- floor(sqrt(ncol(train_processed) - 1))
 min_node <- 5
 sample_frac <- 0.8
@@ -344,9 +344,6 @@ val_rmse <- yardstick::rmse_vec(
 val_rmse
 ```
 
-# 8) (Optional) Deep Learning Notes
-
-You can explore `keras` (LSTM/GRU) later by preparing sequence windows per series and fitting a 3D tensor model. Start with the global Random Forest above for a strong baseline.
 
 # 9) Refit on Full Train & Prepare Test Features
 
