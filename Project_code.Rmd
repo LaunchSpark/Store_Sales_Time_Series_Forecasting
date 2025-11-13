@@ -256,22 +256,42 @@ forecast accuracy gives us a benchmark to beat with more expressive
 global models.
 
 ```{r baseline-ts}
-one_series <- as_tibble(train) %>%
-  filter(store_nbr == 1, family == "GROCERY I") %>%
+baseline_store <- 1
+baseline_family <- "GROCERY I"
+
+train_series <- as_tibble(train_fit) %>%
+  filter(store_nbr == baseline_store, family == baseline_family) %>%
   arrange(date)
 
-ts_one <- ts(one_series$sales, frequency = 7)
-fit_arima <- forecast::auto.arima(ts_one)
-fit_ets   <- forecast::ets(ts_one)
+valid_series <- as_tibble(valid_fit) %>%
+  filter(store_nbr == baseline_store, family == baseline_family) %>%
+  arrange(date)
 
-actual_lastH <- tail(ts_one, H)
-fc_arima <- forecast::forecast(fit_arima, h=H)$mean
-fc_ets   <- forecast::forecast(fit_ets, h=H)$mean
+train_sales <- train_series %>%
+  filter(!is.na(sales)) %>%
+  pull(sales)
+
+valid_sales <- valid_series %>%
+  filter(!is.na(sales)) %>%
+  pull(sales)
+
+stopifnot(length(valid_sales) >= H)
+
+ts_train <- ts(train_sales, frequency = 7)
+fit_arima <- forecast::auto.arima(ts_train)
+fit_ets   <- forecast::ets(ts_train)
+
+fc_arima <- forecast::forecast(fit_arima, h = H)$mean
+fc_ets   <- forecast::forecast(fit_ets, h = H)$mean
+
+actual_lastH <- tail(valid_sales, H)
 
 tibble(
-  model = c("ARIMA","ETS"),
-  RMSE  = c(sqrt(mean((fc_arima - actual_lastH)^2)),
-            sqrt(mean((fc_ets   - actual_lastH)^2)))
+  model = c("ARIMA", "ETS"),
+  RMSE  = c(
+    sqrt(mean((fc_arima - actual_lastH)^2, na.rm = TRUE)),
+    sqrt(mean((fc_ets   - actual_lastH)^2, na.rm = TRUE))
+  )
 )
 ```
 
