@@ -403,6 +403,16 @@ tibble(
 )
 ```
 
+These two baselines are intentional rather than redundant. **ARIMA**
+provides an autoregressive, differenced view of the demand history that
+captures shocks tied to promotions or holidays. **ETS**, on the other
+hand, emphasizes exponentially weighted trend/seasonality components and
+is a better stress test for smoother families where level shifts matter
+more than sudden spikes. Keeping both reveals whether a single
+store-family behaves more like a volatile, promotion-driven series or a
+stable, seasonal one; if their errors converged we would drop one, but in
+practice we see complementary failure modes worth tracking.
+
 # 7) Global Supervised Model: Random Forest (with Recipe)
 
 With single-series baselines in place, we move to a global model that can
@@ -474,6 +484,13 @@ val_rmse <- yardstick::rmse_vec(
 val_rmse
 ```
 
+This random forest pass serves two purposes: (1) it establishes a global
+supervised benchmark that blends recent lags, promotions, and store
+metadata, and (2) it yields permutation importances we rely on for
+feature screening. Running it once up front is therefore justified, even
+though we train another forest later—the second fit uses a pruned feature
+set derived from these importances rather than duplicating work.
+
 To better understand which engineered signals drive the forest, we log
 the permutation-based variable importance from `ranger`. The resulting
 table ranks every predictor so we can focus on the most informative ones
@@ -540,6 +557,12 @@ tibble(
   RMSE = c(val_rmse, val_rmse_top)
 )
 ```
+
+We keep only the top-ranked predictor configuration for downstream work.
+The "all predictors" RMSE is retained purely for documentation so future
+contributors can see the lift from feature selection; the production path
+continues exclusively with the `Top k` forest, avoiding redundant model
+variants at prediction time.
 
 ### Avoiding `mem.maxVSize()` errors
 
@@ -629,6 +652,12 @@ rf_final <- ranger(
 pred_test_log <- predict(rf_final, data = test_top)$predictions
 pred_test <- pmax(0, expm1(pred_test_log))
 ```
+
+Refitting the trimmed forest on all available history is the final model
+usage, and it is required to translate the validated approach into a
+submission-ready forecast. We deliberately skip training any other
+full-data models so the pipeline remains single-tracked from this point
+forward.
 
 # 10) Submission CSV
 
