@@ -474,6 +474,102 @@ val_rmse <- yardstick::rmse_vec(
 val_rmse
 ```
 
+To better understand which engineered signals drive the forest, we log
+the permutation-based variable importance from `ranger`. The resulting
+table ranks every predictor so we can focus on the most informative ones
+(e.g., the strongest rolling statistics such as `roll7`/`roll5`).
+
+```{r rf-importance}
+importance_tbl <- enframe(
+  rf_fit$variable.importance,
+  name = "predictor",
+  value = "importance"
+) %>%
+  arrange(desc(importance)) %>%
+  mutate(rank = row_number())
+
+top_k_predictors <- 12
+important_predictors <- importance_tbl %>%
+  slice_head(n = top_k_predictors) %>%
+  pull(predictor)
+
+importance_tbl %>%
+  mutate(
+    pct_of_top = importance / max(importance),
+    pct_of_top = sprintf("%0.1f%%", pct_of_top * 100)
+  ) %>%
+  select(rank, predictor, importance, pct_of_top) %>%
+  knitr::kable(
+    col.names = c("Rank", "Predictor", "Permutation importance", "% of top signal"),
+    caption = sprintf("Variable importance ranked across all %s engineered predictors", nrow(importance_tbl))
+  )
+```
+
+Rather than feeding the forest all engineered features, we can retrain
+with only the highest-ranked predictors. This trims the feature matrix,
+which typically reduces training time and may marginally improve
+generalization if noisy predictors are dropped. Below we keep the top 12
+signals surfaced in the ranking step and benchmark their validation
+RMSE.
+
+```{r rf-top-train}
+train_top_processed <- train_processed %>% select(y, all_of(important_predictors))
+valid_top_processed <- valid_processed %>% select(y, all_of(important_predictors))
+
+set.seed(42)
+rf_top_fit <- ranger(
+  formula = y ~ .,
+  data = train_top_processed,
+  num.trees = num_trees,
+  mtry = floor(sqrt(length(important_predictors))),
+  min.node.size = min_node,
+  sample.fraction = sample_frac,
+  respect.unordered.factors = "order",
+  importance = "permutation",
+  write.forest = TRUE
+)
+
+pred_valid_top <- predict(rf_top_fit, data = valid_top_processed)$predictions
+val_rmse_top <- yardstick::rmse_vec(
+  truth = valid_top_processed$y,
+  estimate = pred_valid_top
+)
+
+tibble(
+  model = c("All predictors", sprintf("Top %s predictors", top_k_predictors)),
+  RMSE = c(val_rmse, val_rmse_top)
+)
+```
+
+### Avoiding `mem.maxVSize()` errors
+
+Training on thousands of `(store, family)` slices plus dozens of engineered
+lags can exhaust the default vector heap, especially on Windows where R caps
+`mem.maxVSize()` at 16 GB. The following guardrails keep the workflow within
+that budget:
+
+* Keep only the strongest predictors (`important_predictors`) when training or
+  refitting, which we now do automatically.
+* Release heavy intermediate objects as soon as they are no longer required and
+  trigger garbage collection.
+* If you still approach the 16 GB ceiling, raise the vector heap limit **before
+  launching R** by setting `R_MAX_VSIZE` in `~/.Renviron` (example below).
+* As a last resort, trim `num.trees` or lower `sample_frac` to shrink the
+  in-memory forest footprint.
+
+```{r rf-cleanup, results='hide'}
+rm(train_processed, valid_processed, train_top_processed, valid_top_processed)
+gc()
+```
+
+```{r rf-mem-limit, eval=FALSE}
+# In ~/.Renviron (or before starting an R session):
+# R_MAX_VSIZE=32Gb
+#
+# Or interactively, restart R after running:
+Sys.setenv(R_MAX_VSIZE = "32Gb")
+```
+
 
 # 9) Refit on Full Train & Prepare Test Features
 
@@ -516,18 +612,21 @@ train_all <- as_tibble(train) %>%
 
 train_all_processed <- bake(prep_rec, new_data = train_all)
 
+train_all_top <- train_all_processed %>% select(y, all_of(important_predictors))
+test_top <- test_baked %>% select(all_of(important_predictors))
+
 rf_final <- ranger(
   formula = y ~ .,
-  data = train_all_processed,
+  data = train_all_top,
   num.trees = num_trees,
-  mtry = mtry_val,
+  mtry = floor(sqrt(length(important_predictors))),
   min.node.size = min_node,
   sample.fraction = 1,
   respect.unordered.factors = "order",
   seed = 42
 )
 
-pred_test_log <- predict(rf_final, data = test_baked)$predictions
+pred_test_log <- predict(rf_final, data = test_top)$predictions
 pred_test <- pmax(0, expm1(pred_test_log))
 ```
 
