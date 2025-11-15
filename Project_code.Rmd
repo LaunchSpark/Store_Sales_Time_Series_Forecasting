@@ -161,8 +161,8 @@ for (i in seq_len(nrow(package_report))) {
 }
 
 rm(package_report)
-``` 
 ```
+
 
 > Place the competition CSVs in a local folder, e.g., `data/`.
 
@@ -450,7 +450,7 @@ training and strong baselines.
 
 ```{r rf-train}
 set.seed(42)
-num_trees <- 30
+num_trees <- 200
 mtry_val <- floor(sqrt(ncol(train_processed) - 1))
 min_node <- 5
 sample_frac <- 0.8
@@ -462,6 +462,7 @@ rf_fit <- ranger(
   min.node.size = min_node,
   sample.fraction = sample_frac,
   respect.unordered.factors = "order",
+  importance = "permutation", 
   write.forest = TRUE
 )
 
