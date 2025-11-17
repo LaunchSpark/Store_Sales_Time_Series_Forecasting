@@ -460,7 +460,7 @@ training and strong baselines.
 
 ```{r rf-train}
 set.seed(42)
-num_trees <- 200
+num_trees <- 30
 mtry_val <- floor(sqrt(ncol(train_processed) - 1))
 min_node <- 5
 sample_frac <- 0.8
@@ -583,14 +583,6 @@ that budget:
 ```{r rf-cleanup, results='hide'}
 rm(train_processed, valid_processed, train_top_processed, valid_top_processed)
 gc()
-```
-
-```{r rf-mem-limit, eval=FALSE}
-# In ~/.Renviron (or before starting an R session):
-# R_MAX_VSIZE=32Gb
-#
-# Or interactively, restart R after running:
-Sys.setenv(R_MAX_VSIZE = "32Gb")
 ```
 
 
