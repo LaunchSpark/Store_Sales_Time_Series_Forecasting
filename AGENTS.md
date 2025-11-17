@@ -37,4 +37,3 @@ This file applies to the entire repository. Follow these conventions whenever yo
 - Keep notebook sections self-contained and labeled with numeric prefixes to preserve the documented flow.
 - When adding new scripts or modules, update `README.md` with usage instructions and ensure file paths remain relative to the project root.
 - Prefer reproducible seeds and avoid writing raw Kaggle data to version control.
-- review the file `assignment_resources/assighnmentChecklist.md` and varify that either each section is complete, or that there are TODOs 
