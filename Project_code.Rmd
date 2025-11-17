@@ -338,6 +338,14 @@ train[, `:=`(
 ), by = .(store_nbr, family)]
 ```
 
+Each lag/rolling feature is scoped to a single `(store_nbr, family)` so
+the model learns from store-specific history. The lags (`lag7`, `lag14`,
+`lag28`) reference prior days exactly one week, two weeks, and four weeks
+back, while the roll columns compute trailing averages over the previous
+7, 28, or 56 days (after shifting by one day to avoid peeking at the
+current target). This makes weekly cadence and medium/long-term momentum
+explicit for downstream models without introducing leakage.
+
 # 5) Time-Based Validation Split
 
 Rather than shuffling observations we carve out the final 16 days as a
@@ -356,66 +364,9 @@ valid_fit <- train[date >= valid_start]
 list(train_rows = nrow(train_fit), valid_rows = nrow(valid_fit))
 ```
 
-# 6) Baseline: ARIMA & ETS (Single-Series Example)
+# 6) Global Supervised Model: Random Forest (with Recipe)
 
-To ground expectations we fit classic univariate baselines—ARIMA and
-ETS—on a representative store-family series. Measuring their 16-day
-forecast accuracy gives us a benchmark to beat with more expressive
-global models.
-
-```{r baseline-ts}
-baseline_store <- 1
-baseline_family <- "GROCERY I"
-
-train_series <- as_tibble(train_fit) %>%
-  filter(store_nbr == baseline_store, family == baseline_family) %>%
-  arrange(date)
-
-valid_series <- as_tibble(valid_fit) %>%
-  filter(store_nbr == baseline_store, family == baseline_family) %>%
-  arrange(date)
-
-train_sales <- train_series %>%
-  filter(!is.na(sales)) %>%
-  pull(sales)
-
-valid_sales <- valid_series %>%
-  filter(!is.na(sales)) %>%
-  pull(sales)
-
-stopifnot(length(valid_sales) >= H)
-
-ts_train <- ts(train_sales, frequency = 7)
-fit_arima <- forecast::auto.arima(ts_train)
-fit_ets   <- forecast::ets(ts_train)
-
-fc_arima <- forecast::forecast(fit_arima, h = H)$mean
-fc_ets   <- forecast::forecast(fit_ets, h = H)$mean
-
-actual_lastH <- tail(valid_sales, H)
-
-tibble(
-  model = c("ARIMA", "ETS"),
-  RMSE  = c(
-    sqrt(mean((fc_arima - actual_lastH)^2, na.rm = TRUE)),
-    sqrt(mean((fc_ets   - actual_lastH)^2, na.rm = TRUE))
-  )
-)
-```
-
-These two baselines are intentional rather than redundant. **ARIMA**
-provides an autoregressive, differenced view of the demand history that
-captures shocks tied to promotions or holidays. **ETS**, on the other
-hand, emphasizes exponentially weighted trend/seasonality components and
-is a better stress test for smoother families where level shifts matter
-more than sudden spikes. Keeping both reveals whether a single
-store-family behaves more like a volatile, promotion-driven series or a
-stable, seasonal one; if their errors converged we would drop one, but in
-practice we see complementary failure modes worth tracking.
-
-# 7) Global Supervised Model: Random Forest (with Recipe)
-
-With single-series baselines in place, we move to a global model that can
+With engineered features in place, we move to a global model that can
 share information across all stores and product families. We start by
 selecting engineered predictors, log-transforming the target, and setting
 up a `{recipes}` pipeline so the preprocessing is reproducible.
@@ -594,7 +545,7 @@ Sys.setenv(R_MAX_VSIZE = "32Gb")
 ```
 
 
-# 9) Refit on Full Train & Prepare Test Features
+# 7) Refit on Full Train & Prepare Test Features
 
 Once satisfied with validation performance we refit on all available
 training data. We copy forward the most recent lagged values for each
@@ -659,7 +610,7 @@ submission-ready forecast. We deliberately skip training any other
 full-data models so the pipeline remains single-tracked from this point
 forward.
 
-# 10) Submission CSV
+# 8) Submission CSV
 
 The last modeling step is to pair the predictions with their Kaggle ids
 and save a submission file. Automating this export inside the notebook
@@ -675,11 +626,11 @@ fwrite(submission, "submission.csv")
 submission %>% head()
 ```
 
-# 11) Iterate & Improve
+# 9) Iterate & Improve
 
 * Verify CV design (e.g., `rsample::rolling_origin`) to match the 16-day horizon.
 * Add richer holiday features (national vs regional, pre/post-holiday flags), family-specific models, or recursive lags for multi-step forecasting.
-* Consider stacking (ARIMA/ETS + Random Forest) or trying `{lightgbm}` / `{catboost}`.
+* Consider stacking tree ensembles or trying `{lightgbm}` / `{catboost}`.
 
 ---
 
