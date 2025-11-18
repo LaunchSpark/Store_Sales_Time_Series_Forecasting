@@ -515,6 +515,36 @@ contributors can see the lift from feature selection; the production path
 continues exclusively with the `Top k` forest, avoiding redundant model
 variants at prediction time.
 
+To visualize how the trimmed forest tracks the held-out horizon, we plot
+the validation window's actual sales against the model's predictions.
+Aggregating to daily totals smooths the line plot while still showing any
+systematic bias over time.
+
+```{r rf-validation-plot, fig.height=4.5}
+validation_plot <- valid_fit %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  as_tibble() %>%
+  transmute(
+    date,
+    actual = sales,
+    prediction = expm1(pred_valid_top)
+  ) %>%
+  group_by(date) %>%
+  summarise(across(c(actual, prediction), sum), .groups = "drop") %>%
+  pivot_longer(c(actual, prediction), names_to = "series", values_to = "sales")
+
+validation_plot %>%
+  ggplot(aes(x = date, y = sales, color = series)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Validation window: actual vs. Random Forest prediction",
+    x = "Date",
+    y = "Daily sales"
+  ) +
+  scale_color_manual(values = c(actual = "#1b9e77", prediction = "#d95f02")) +
+  theme_minimal()
+```
+
 ### Avoiding `mem.maxVSize()` errors
 
 Training on thousands of `(store, family)` slices plus dozens of engineered
