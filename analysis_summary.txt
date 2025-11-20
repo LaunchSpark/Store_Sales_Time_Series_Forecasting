@@ -1,0 +1,20 @@
+Problem Statement and Background
+- Statement: Develop a robust time-series forecasting pipeline to predict store-item-level daily sales for an unseen 16-day horizon, enabling accurate competition submission generation.
+- Background: The project is built around the Kaggle "Store Sales - Time Series Forecasting" dataset, which provides historical sales, oil prices, holidays, transactions, and store metadata. The notebook-centric workflow ingests these sources, engineers calendar and lag features, and trains a global model to optimize RMSE on a validation window mirroring the competition's evaluation.
+
+Data and Exploratory Analysis
+- Data sources: train.csv (store, family, date, sales), test.csv (forecast horizon), stores.csv (store metadata), oil.csv (daily oil prices), holidays_events.csv (holiday information), transactions.csv (store-level transactions).
+- Data processing overview: Dates are normalized to Date class; holiday signals are aggregated; oil prices are forward-filled; transactions are summarized per store. Datasets are merged into a unified table keyed by (store_nbr, family, date).
+- Exploratory highlights: Seasonal patterns observed via day-of-week and month-of-year effects; lagged sales (7/14/28-day) and rolling means (7/28/56-day) capture autocorrelation. Variance across families and stores motivates a global model rather than many local models. Validation is aligned to a 16-day holdout to mirror competition scoring.
+
+Methods
+- Forecasting approach: A global Random Forest (ranger) trained on recipe-engineered features with target defined as log1p(sales). The model leverages calendar features, lagged/rolling statistics, and holiday/transaction signals. RSAMPLE splits create a validation slice matching the 16-day forecast horizon, and yardstick computes RMSE for model selection.
+- Preprocessing recipe: recipes package standardizes numeric predictors, encodes categorical fields (store_nbr, family), and ensures consistent transforms across train/validation/test.
+
+Tools
+- Languages and packages: R (data.table for ingestion/mutation, recipes for feature engineering, rsample for resampling, ranger for modeling, yardstick for metrics, lubridate for date handling).
+- Workflow: R Markdown notebook (Project_code.Rmd) orchestrates ingestion, feature engineering, model training, validation, and submission generation; submission.csv is produced at the project root.
+
+Appendix
+- References: Kaggle competition details and data dictionary: https://www.kaggle.com/competitions/store-sales-time-series-forecasting
+- Repository: https://github.com/ <provide repository URL when publishing>; current working directory: /workspace/Store_Sales_Time_Series_Forecasting
