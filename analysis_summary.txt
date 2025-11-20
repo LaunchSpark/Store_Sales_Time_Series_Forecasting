@@ -8,7 +8,7 @@ Data and Exploratory Analysis
 - Exploratory highlights: Seasonal patterns observed via day-of-week and month-of-year effects; lagged sales (7/14/28-day) and rolling means (7/28/56-day) capture autocorrelation. Variance across families and stores motivates a global model rather than many local models. Validation is aligned to a 16-day holdout to mirror competition scoring.
 
 Methods
-- Forecasting approach: A global Random Forest (ranger) trained on recipe-engineered features with target defined as log1p(sales). The model leverages calendar features, lagged/rolling statistics, and holiday/transaction signals. RSAMPLE splits create a validation slice matching the 16-day forecast horizon, and yardstick computes RMSE for model selection.
+- Forecasting approach: A global Random Forest (ranger) trained on recipe-engineered features with target defined as log1p(sales). The model leverages calendar features, lagged/rolling statistics, and holiday/transaction signals. RSAMPLE splits create a validation slice matching the 16-day forecast horizon, and yardstick computes RMSE for model selection. Ranger is configured to grow a large ensemble (hundreds of trees) with mtry tuned for a balanced bias-variance trade-off; min.node.size is kept small to capture local nonlinearities in store-family segments, while sample.fraction < 1 promotes robustness through bagging. Variable importance from ranger helps confirm that lagged sales and calendar fields dominate predictive power, guiding future feature additions.
 - Preprocessing recipe: recipes package standardizes numeric predictors, encodes categorical fields (store_nbr, family), and ensures consistent transforms across train/validation/test.
 
 Tools
