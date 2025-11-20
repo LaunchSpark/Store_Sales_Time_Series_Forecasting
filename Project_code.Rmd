@@ -457,7 +457,8 @@ apply_preprocessor <- function(df, preproc) {
 
   df_mod %>%
     select(any_of("y"), all_of(preproc$numeric_keep), all_of(categorical_cols)) %>%
-    as_tibble()
+    as_tibble() %>%
+    rename_with(make.names, everything())
 }
 
 train_ids <- as_tibble(train_fit) %>%
