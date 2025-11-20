@@ -215,45 +215,50 @@ hol[,   date := as.Date(date)]
 trans[, date := as.Date(date)]
 
 # Holidays: simple signal with transferred handled
-hol_clean <- as_tibble(hol) %>%
-  mutate(is_transferred = if_else(transferred == "True", 1L, 0L, missing = 0L),
-         is_holiday     = if_else(is_transferred == 1L, 0L, 1L, missing = 0L)) %>%
-  group_by(date) %>%
-  summarise(is_holiday = as.integer(any(is_holiday == 1L)), .groups = "drop")
+hol_clean <- as.data.table(hol)[, `:=`(
+  is_transferred = fifelse(transferred == "True", 1L, 0L, na = 0L),
+  is_holiday = fifelse(transferred == "True", 0L, 1L, na = 0L)
+)][, .(is_holiday = as.integer(any(is_holiday == 1L))), by = date]
 
-stopifnot(nrow(hol_clean) == dplyr::n_distinct(hol_clean$date))
+setkey(hol_clean, date)
+stopifnot(nrow(hol_clean) == hol_clean[, uniqueN(date)])
 
-# Oil: forward-fill gaps
-oil_full <- tibble(date = seq(min(oil$date), max(oil$date), by = "day")) %>%
-  left_join(as_tibble(oil), by = "date") %>%
-  arrange(date) %>%
-  tidyr::fill(dcoilwtico, .direction = "down")
+# Oil: forward-fill gaps with data.table to avoid extra tibble copies
+full_dates <- data.table(date = seq(min(oil$date), max(oil$date), by = "day"))
+setkey(oil, date)
+oil_full <- oil[full_dates, on = "date"]
+oil_full[, dcoilwtico := nafill(dcoilwtico, type = "locf")]
+oil_u <- unique(oil_full, by = "date")
 
-oil_u <- oil_full %>% distinct(date, .keep_all = TRUE)
+setkey(oil_u, date)
+stopifnot(nrow(oil_u) == oil_u[, uniqueN(date)])
 
-stopifnot(nrow(oil_u) == dplyr::n_distinct(oil_u$date))
+trans_u <- as.data.table(trans)[
+  , .(transactions = sum(transactions, na.rm = TRUE)), by = .(date, store_nbr)
+]
 
-trans_u <- as_tibble(trans) %>%
-  group_by(date, store_nbr) %>%
-  summarise(transactions = sum(transactions, na.rm = TRUE), .groups = "drop")
+setkey(trans_u, date, store_nbr)
+stopifnot(nrow(trans_u) == trans_u[, uniqueN(date, store_nbr)])
 
-stopifnot(nrow(trans_u) == dplyr::n_distinct(trans_u$date, trans_u$store_nbr))
+stores_u <- as.data.table(stores)[, .SD[1], by = store_nbr]
 
-stores_u <- as_tibble(stores) %>% distinct(store_nbr, .keep_all = TRUE)
+setkey(stores_u, store_nbr)
+stopifnot(nrow(stores_u) == stores_u[, uniqueN(store_nbr)])
 
-stopifnot(nrow(stores_u) == dplyr::n_distinct(stores_u$store_nbr))
-
-# Join helper (use tibbles to join, then back to data.table)
+# Join helper (data.table merges to limit repeated copies)
 join_base <- function(df_dt) {
-  df <- as_tibble(df_dt) %>%
-    left_join(stores_u, by = "store_nbr", relationship = "many-to-one") %>%
-    left_join(oil_u, by = "date", relationship = "many-to-one") %>%
-    left_join(hol_clean, by = "date", relationship = "many-to-one") %>%
-    left_join(trans_u, by = c("date","store_nbr"), relationship = "many-to-one") %>%
-    clean_names()
-  setDT(df)  # return as data.table
-  df
+  out <- merge(df_dt, stores_u, by = "store_nbr", all.x = TRUE, allow.cartesian = FALSE)
+  out <- merge(out, oil_u, by = "date", all.x = TRUE, allow.cartesian = FALSE)
+  out <- merge(out, hol_clean, by = "date", all.x = TRUE, allow.cartesian = FALSE)
+  out <- merge(out, trans_u, by = c("date", "store_nbr"), all.x = TRUE, allow.cartesian = FALSE)
+  out <- clean_names(out)
+  setDT(out)
+  out
 }
+
+# Release raw inputs that are no longer needed to trim memory
+rm(oil_full, oil, hol, trans, full_dates)
+gc()
 
 train <- join_base(train)
 test  <- join_base(test)
@@ -608,7 +613,12 @@ that budget:
   in-memory forest footprint.
 
 ```{r rf-cleanup, results='hide'}
-rm(train_processed, valid_processed, train_top_processed, valid_top_processed)
+cleanup_objects <- c(
+  "train_processed", "valid_processed", "train_top_processed", "valid_top_processed",
+  "train_ids", "valid_ids", "train_fit", "valid_fit", "rf_fit", "pred_valid"
+)
+
+rm(list = intersect(cleanup_objects, ls()))
 gc()
 ```
 
