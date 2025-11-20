@@ -8,13 +8,13 @@ Our question is how can we predict sales data for a grocery store. We are analyz
 We started with really clean data, so there was not much work we needed to do. We had six files to start. One with holiday event data, oil data, store data, transaction data, training data, and testing data. We made all the data files into data tables and joined them together, and we filled in NA’s with average values of similar data points. Ecuador’s economy is largely impacted by the value of oil, so we have some questions to ask regarding that. What effect does the value and/or sale of oil have on the general willingness to spend? 
 
 
-3. Methods (10%)
-For this project, I explored a global Random Forest forecasting approach using the ranger algorithm trained on a rich set of recipe-engineered features with the target transformed as log1p(sales) to stabilize variance. The method integrates calendar features, lagged and rolling historical statistics, and holiday/transaction indicators, all designed to capture temporal patterns relevant to the forecasting task.
-To ensure valid model evaluation, I used rsample to create a time-based validation slice aligned with the required 16-day forecast horizon, preventing data leakage. Model performance was compared using RMSE, computed via the yardstick package, which served as the primary metric for method selection.
+3. Methods (10%) Lucas Code and Summary (70%), Trey Code and Summary Review(30%)
+For this project, we explored a global Random Forest forecasting approach using the ranger algorithm trained on a rich set of recipe-engineered features with the target transformed as log1p(sales) to stabilize variance. The method integrates calendar features, lagged and rolling historical statistics, and holiday/transaction indicators, all designed to capture temporal patterns relevant to the forecasting task.
+To ensure valid model evaluation, we used rsample to create a time-based validation slice aligned with the required 16-day forecast horizon, preventing data leakage. Model performance was compared using RMSE, computed via the yardstick package, which served as the primary metric for method selection.
 A complete preprocessing recipe was built with the recipes package, which standardized numeric predictors, encoded categorical features (such as store_nbr and family), and guaranteed that identical transformations were applied across the train, validation, and test datasets.
 Several preprocessing and modeling variations were considered but ultimately not used—such as training separate per-store models and experimenting with non-log-transformed targets—because they either increased overfitting, produced unstable forecasts, or yielded higher RMSE during validation.
 
-4. Tools (10%)
+4. Tools (10%) Lucas Code and Summary (70%), Trey Code and Summary Review(30%)
 The project was implemented entirely in R, leveraging a set of tools chosen specifically to support large-scale feature engineering, efficient model training, and reliable evaluation.
 Key packages included:
 data.table for fast data ingestion and mutation,
@@ -38,6 +38,13 @@ lubridate for handling date-based feature extraction.
 All work was conducted in an R Markdown notebook (Project_code.Rmd), which orchestrated the full workflow from ingestion to feature creation, modeling, validation, and final prediction generation. A submission.csv file was produced at the project root as the final deliverable.
 Some tools were tested but ultimately set aside. For example, alternative modeling libraries (such as xgboost) were investigated but not used because initial tuning attempts yielded inferior performance and increased computational burden for this dataset. The selected toolchain provided the most stable and interpretable workflow given the time-series structure of the problem.
 
+
+5. Results (35%)
+
+
+[Give a detailed summary of the results of your work. Here is where you specify the exact performance measures you used. Usually there will be some kind of accuracy or quality measure. There may also be a performance (runtime or throughput) measure. Please use visualizations whenever possible. Include links to interactive visualizations if you built them. You should attempt to evaluate a primary model and in addition a "baseline" model. The baseline is typically the simplest model that's applicable to that data problem, e.g. Naive Bayes for classification, or K-means on raw feature data for clustering. If there isn't a plausible automatic baseline model, you can e.g. compare with human performance by having someone hand-solve your problem on a small subset of data. You won’t expect to achieve this level of performance, but it establishes a scale by which to measure your project's performance. Compare the performance of your baseline model and primary model and explain the differences. Note: everyone on your Team should code/test/document results from at least one model.]
+
+
 6. Summary and Conclusions (10%)
 
 
@@ -51,3 +58,9 @@ https://www.kaggle.com/competitions/store-sales-time-series-forecasting
 https://github.com/LaunchSpark/Store_Sales_Time_Series_Forecasting
 
 The authors acknowledge the utilization of ChatGPT/Codex, Perplexity, and Google Gemini, language models developed by OpenAI, Perplexity, and Google, in the preparation of this assignment. Each model was employed in the following manners within this assignment: Brainstorming, implementing pseudo-code, research, readability, and documentation
+
+
+
+
+
+
