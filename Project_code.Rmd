@@ -467,10 +467,14 @@ apply_preprocessor <- function(df, preproc) {
     data = df_mod,
     na.action = stats::na.pass
   )
-  na_dropped <- attr(design, "na.action")
-  if (!is.null(na_dropped)) {
+  if (nrow(design) != nrow(df_mod)) {
+    row_index <- suppressWarnings(as.integer(rownames(design)))
     full_design <- matrix(NA_real_, nrow = nrow(df_mod), ncol = ncol(design))
-    full_design[-na_dropped, ] <- design
+    if (!any(is.na(row_index))) {
+      full_design[row_index, ] <- design
+    } else {
+      full_design[seq_len(nrow(design)), ] <- design
+    }
     colnames(full_design) <- colnames(design)
     design <- full_design
   }
