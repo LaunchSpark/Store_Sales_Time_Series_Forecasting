@@ -40,12 +40,12 @@ required_packages <- data.frame(
   package = c(
     "tidyverse", "data.table", "lubridate", "janitor", "skimr",
     "tsibble", "feasts", "fable", "forecast",
-    "recipes", "rsample", "yardstick", "ranger"
+    "rsample", "yardstick", "ranger"
   ),
   min_version = c(
     "1.3.2", "1.14.10", "1.9.3", "2.2.0", "2.1.5",
     "1.1.3", "0.3.2", "0.3.4", "8.23.0",
-    "1.0.10", "1.2.0", "1.2.0", "0.15.2"
+    "1.2.0", "1.2.0", "0.15.2"
   ),
   stringsAsFactors = FALSE
 )
@@ -311,7 +311,7 @@ make_features <- function(DT) {
     week = lubridate::isoweek(date)
   )]
   DT[, is_weekend := as.integer(wday %in% c(1L, 7L))]
-  # Convert to factors for recipe encoding later (keep as columns)
+  # Convert to factors for consistent one-hot encoding later (keep as columns)
   DT[, `:=`(
     fam = as.factor(family),
     city = as.factor(city),
@@ -364,12 +364,14 @@ valid_fit <- train[date >= valid_start]
 list(train_rows = nrow(train_fit), valid_rows = nrow(valid_fit))
 ```
 
-# 6) Global Supervised Model: Random Forest (with Recipe)
+# 6) Global Supervised Model: Random Forest (with explicit preprocessing)
 
 With engineered features in place, we move to a global model that can
 share information across all stores and product families. We start by
 selecting engineered predictors, log-transforming the target, and setting
-up a `{recipes}` pipeline so the preprocessing is reproducible.
+up explicit preprocessing helpers so factor encoding, zero-variance
+filtering, and numeric scaling remain synchronized across train,
+validation, and test sets.
 
 ```{r ml-prep}
 model_cols <- c("onpromotion","dcoilwtico","is_holiday","transactions",
@@ -377,18 +379,56 @@ model_cols <- c("onpromotion","dcoilwtico","is_holiday","transactions",
                 "lag7","lag14","lag28","roll7","roll28","roll56",
                 "store_nbr","family","city","state","type","cluster")
 
-model_df <- as_tibble(train) %>%
-  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
-  mutate(y = log1p(sales)) %>%
-  select(y, all_of(model_cols))
+categorical_cols <- c("store_nbr", "family", "city", "state", "type", "cluster")
+numeric_cols <- setdiff(model_cols, categorical_cols)
 
-rec <- recipe(y ~ ., data = model_df) %>%
-  step_string2factor(all_nominal_predictors()) %>%
-  step_dummy(all_nominal_predictors()) %>%
-  step_zv(all_predictors()) %>%
-  step_normalize(all_numeric_predictors())
+build_preprocessor <- function(train_predictors) {
+  train_factors <- train_predictors %>%
+    mutate(across(all_of(categorical_cols), ~ factor(.x)))
 
-prep_rec <- prep(rec)
+  numeric_means <- sapply(train_factors[numeric_cols], function(x) mean(x, na.rm = TRUE))
+  numeric_sds <- sapply(train_factors[numeric_cols], function(x) sd(x, na.rm = TRUE))
+  zero_sd_nums <- names(numeric_sds)[is.na(numeric_sds) | numeric_sds == 0]
+  numeric_keep <- setdiff(numeric_cols, zero_sd_nums)
+
+  numeric_means <- numeric_means[numeric_keep]
+  numeric_sds <- numeric_sds[numeric_keep]
+
+  feature_formula <- as.formula(
+    paste("~", paste(c(numeric_keep, categorical_cols), collapse = " + "), "-1")
+  )
+
+  scaled_train <- train_factors %>%
+    mutate(across(all_of(numeric_keep), ~ (.x - numeric_means[cur_column()]) / numeric_sds[cur_column()]))
+
+  train_design <- model.matrix(feature_formula, data = scaled_train)
+  col_var <- apply(train_design, 2, stats::var)
+  keep_cols <- names(col_var)[col_var > 0]
+
+  list(
+    cat_levels = lapply(train_factors[categorical_cols], levels),
+    numeric_means = numeric_means,
+    numeric_sds = numeric_sds,
+    numeric_keep = numeric_keep,
+    feature_formula = feature_formula,
+    keep_cols = keep_cols
+  )
+}
+
+apply_preprocessor <- function(df, preproc) {
+  df_mod <- df %>%
+    mutate(across(all_of(preproc$numeric_keep), ~ (.x - preproc$numeric_means[cur_column()]) / preproc$numeric_sds[cur_column()])) %>%
+    mutate(across(all_of(categorical_cols), ~ factor(.x, levels = preproc$cat_levels[[cur_column()]])))
+
+  design <- model.matrix(preproc$feature_formula, data = df_mod)
+  design <- design[, preproc$keep_cols, drop = FALSE]
+
+  out <- as_tibble(design)
+  if ("y" %in% names(df)) {
+    out <- bind_cols(tibble(y = df$y), out)
+  }
+  out
+}
 
 train_ids <- as_tibble(train_fit) %>%
   filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
@@ -400,11 +440,13 @@ valid_ids <- as_tibble(valid_fit) %>%
   mutate(y = log1p(sales)) %>%
   select(y, all_of(model_cols))
 
-train_processed <- bake(prep_rec, new_data = train_ids)
-valid_processed <- bake(prep_rec, new_data = valid_ids)
+preproc <- build_preprocessor(train_ids %>% select(all_of(model_cols)))
+
+train_processed <- apply_preprocessor(train_ids, preproc)
+valid_processed <- apply_preprocessor(valid_ids, preproc)
 ```
 
-After baking the recipe we train a random forest with `{ranger}` and
+With preprocessing locked in we train a random forest with `{ranger}` and
 evaluate its validation RMSE. Tree ensembles remain robust to nonlinear
 relationships in the engineered feature space while providing fast
 training and strong baselines.
@@ -472,6 +514,10 @@ importance_tbl %>%
     caption = sprintf("Variable importance ranked across all %s engineered predictors", nrow(importance_tbl))
   )
 ```
+
+Because categorical variables are one-hot encoded, the importance table
+lists level-specific columns (e.g., `familyBakery`), and those exact
+names are reused when trimming features for refits and submissions.
 
 Rather than feeding the forest all engineered features, we can retrain
 with only the highest-ranked predictors. This trims the feature matrix,
@@ -572,7 +618,9 @@ gc()
 Once satisfied with validation performance we refit on all available
 training data. We copy forward the most recent lagged values for each
 store-family pair so the model receives familiar inputs when generating
-predictions for the unseen test dates.
+predictions for the unseen test dates. The same preprocessing helpers
+reuse training-set factor levels and scaling statistics to keep the
+encoded columns aligned for the refit and test scoring.
 
 ```{r test-features}
 # Carry forward last known lag/rolling stats per (store, family)
@@ -597,8 +645,8 @@ test2[, `:=`(
 )]
 test2[, c("lag7_last","lag14_last","lag28_last","roll7_last","roll28_last","roll56_last") := NULL]
 
-# Same recipe processing
-test_baked <- bake(prep_rec, new_data = as_tibble(test2))
+# Same preprocessing rules
+test_processed <- apply_preprocessor(as_tibble(test2), preproc)
 
 # Refit on all usable training data
 train_all <- as_tibble(train) %>%
@@ -606,10 +654,10 @@ train_all <- as_tibble(train) %>%
   mutate(y = log1p(sales)) %>%
   select(y, all_of(model_cols))
 
-train_all_processed <- bake(prep_rec, new_data = train_all)
+train_all_processed <- apply_preprocessor(train_all, preproc)
 
 train_all_top <- train_all_processed %>% select(y, all_of(important_predictors))
-test_top <- test_baked %>% select(all_of(important_predictors))
+test_top <- test_processed %>% select(all_of(important_predictors))
 
 rf_final <- ranger(
   formula = y ~ .,
