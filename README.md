@@ -20,7 +20,7 @@ This repository contains an end-to-end workflow for the [Kaggle "Store Sales - T
 - R packages:
   - Core: `tidyverse`, `data.table`, `lubridate`, `janitor`, `skimr`
   - Time series: `tsibble`, `feasts`, `fable`, `forecast`
-  - Modeling & preprocessing: `recipes`, `rsample`, `yardstick`, `ranger`
+  - Modeling & validation: `rsample`, `yardstick`, `ranger`
 - Kaggle competition data placed locally under `data/` (see below)
 
 The notebook installs any missing packages automatically when executed, but pre-installing them can speed up the first run.
@@ -46,21 +46,21 @@ The notebook is organized into clearly labeled sections:
 2. **Load & Inspect Data** – Uses `data.table::fread()` for fast I/O and `skimr` to profile the training set.
 3. **Cleaning & Safe Joins** – Harmonizes date fields, builds holiday indicators, forward-fills oil prices, and prepares transactions totals before joining.
 4. **Feature Engineering** – Creates lagged sales, rolling statistics, calendar features, and oil/holiday signals for each `(store_nbr, family)` combination.
-5. **Validation Split** – Implements a 16-day holdout split that mirrors the competition horizon using `rsample` and `recipes`.
+5. **Validation Split** – Implements a 16-day holdout split that mirrors the competition horizon while keeping preprocessing statistics tied to the training window.
 6. **Modeling** – Trains a global Random Forest with `ranger`, evaluates RMSE on the validation set, and discusses potential enhancements (e.g., deep learning models).
 7. **Refit & Submission** – Rebuilds features on the full training data, scores the test set, and writes `submission.csv` for Kaggle upload.
 
-Each major transformation is performed with `data.table` for efficiency but leverages tidyverse syntax (`dplyr`, `tibble`) where clarity is improved. Feature preprocessing is encapsulated in a `recipes` pipeline so that training, validation, and test data follow identical transformations.
+Each major transformation is performed with `data.table` for efficiency but leverages tidyverse syntax (`dplyr`, `tibble`) where clarity is improved. Feature preprocessing is handled explicitly: categorical columns are factored and one-hot encoded, zero-variance predictors are pruned, and numeric predictors are scaled using training-set statistics that are then reused for validation and test data.
 
 ## Customization tips
 
-- Swap in alternative models (e.g., gradient boosting or deep learning) by replacing the `ranger` training chunk while keeping the baked recipe outputs.
+- Swap in alternative models (e.g., gradient boosting or deep learning) by replacing the `ranger` training chunk while keeping the shared encoded matrices produced by the preprocessing helpers.
 - Extend the calendar features with additional `lubridate` components (e.g., `week`, `quarter`) or country/region-specific holiday flags.
 - Experiment with rolling-origin cross-validation via `rsample::rolling_origin()` to better simulate multiple forecasting periods.
 
 ## Reproducibility
 
-The notebook avoids writing intermediate artifacts by default. If you plan to persist processed datasets or model objects, create a dedicated `artifacts/` directory and ensure it is ignored by Git. Use `set.seed()` (already included in the modeling chunk) to keep results deterministic across runs.
+The notebook avoids writing intermediate artifacts by default and rebuilds encoded design matrices on the fly (no baked recipe outputs). If you plan to persist processed datasets or model objects, create a dedicated `artifacts/` directory and ensure it is ignored by Git. Use `set.seed()` (already included in the modeling chunk) to keep results deterministic across runs.
 
 ---
 
