@@ -1,13 +1,33 @@
 Store Sales - Time Series Forecasting
 Team Member Names: Gavin Davis, Trejan Gannod, Alec Jones, Kaylee Miller, Lucas Starkey
+
 1. Problem Statement and Background (15%) Written by Gavin (50%) and Kaylee (50%)
+
+
 Our question is how can we predict sales data for a grocery store. We are analyzing sales data from thousands of items across a collection of Favorita grocery stores located in Ecuador. This is data given to us from a Kaggle competition. We are specifically given sales data from a thirty day period. The first 15 include the sales figure, but the second 15 does not. The goal is to take the data from the first 15 days we are given, and use it to predict the sales of the following 15 days. We measure success by comparing our test dataset to the actual data on Kaggle. Kaggle uses a Root Mean Squared Logarithmic Error equation to evaluate our model and give us a success metric. These metrics are incredibly useful to the people running these stores, as they can use sales predictions to make decisions like the best days to close for maintenance, or when they should run sales on products. With grocery stores having more accurate forecasting, food waste can be decreased and customer satisfaction can grow. This means that with the help of this data, it will become possible that a customer can be sure that their local store will have exactly what they need the next time they go to shop. This also allows for stores to develop better staffing arrangements from day to day, ensuring that they will be prepared. 
 
 
-2. Data and Exploratory Analysis (15%) Written by Tejan(50%) Work done by Lucas(50%)
-We started with really clean data, so there was not much work we needed to do. We had six files to start. One with holiday event data, oil data, store data, transaction data, training data, and testing data. We made all the data files into data tables and joined them together, and we filled in NA’s with average values of similar data points. Ecuador’s economy is largely impacted by the value of oil, so we have some questions to ask regarding that. What effect does the value and/or sale of oil have on the general willingness to spend? 
 
 
+2. Data and Exploratory Analysis (15%) Written by Trejan(20%), Kaylee(10%), and Gavin(10%). Work done by Lucas(50%)
+
+
+train.csv
+Includes data for training, comprising time series of features store_nbr, family, and onpromotion as well as the target sales. 
+test.csv
+Includes the test data with the same features as the training data. Dates in the test data are 15 days after the training data. 
+transactions.csv
+Includes record of all sales with the date and store number. 
+stores.csv
+Store metadata, including city, state, type, and cluster. 
+oil.csv
+Daily oil prices. Includes values during both train and test data timeframes. 
+holidays_events.csv
+Includes holidays and events with metadata. 
+
+
+
+We started with really clean data, so there was not much work we needed to do. We had six files to start. One with holiday event data, oil data, store data, transaction data, training data, and testing data. The first step was to ensure that all of the data types were the same across each file, we did this with the dates first. We had to do this because we are going to join all the tables on date. After that we worked on the oil file, where there were not values for every date, so we added in each missing date. Then we joined all the tables on date using join_base as a helper tool. For the oil prices we handle NA’s by replacing the value with the previous days, as the price should be similar to the previous days. As far as NA’s for the transaction, holidays, and promotion tables, we set them equal to zero assuming that if one of these events were not recorded then it did not occur on that day.. Ecuador’s economy is largely impacted by the value of oil, and the Kaggle description suggests that the oil market could correlate with the population's free cash. So we intend to analyze the effect of oil prices on grocery sales. 
 3. Methods (10%) Lucas Code and Summary (70%), Trey Code and Summary Review(30%)
 For this project, we explored a global Random Forest forecasting approach using the ranger algorithm trained on a rich set of recipe-engineered features with the target transformed as log1p(sales) to stabilize variance. The method integrates calendar features, lagged and rolling historical statistics, and holiday/transaction indicators, all designed to capture temporal patterns relevant to the forecasting task.
 To ensure valid model evaluation, we used rsample to create a time-based validation slice aligned with the required 16-day forecast horizon, preventing data leakage. Model performance was compared using RMSE, computed via the yardstick package, which served as the primary metric for method selection.
