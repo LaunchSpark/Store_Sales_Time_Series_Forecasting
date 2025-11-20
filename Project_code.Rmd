@@ -256,6 +256,31 @@ join_base <- function(df_dt) {
   out
 }
 
+ensure_columns <- function(dt, cols, context_label) {
+  missing_cols <- setdiff(cols, names(dt))
+  if (length(missing_cols) > 0L) {
+    stop(
+      sprintf(
+        "[%s] Missing columns: %s",
+        context_label,
+        paste(missing_cols, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+}
+
+fill_missing_zero <- function(dt, cols, context_label) {
+  cols_present <- intersect(cols, names(dt))
+
+  ensure_columns(dt, cols, context_label)
+
+  if (length(cols_present) == 0L) return(invisible(dt))
+
+  dt[, (cols_present) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = cols_present]
+  invisible(dt)
+}
+
 # Release raw inputs that are no longer needed to trim memory
 rm(oil_full, oil, hol, trans, full_dates)
 gc()
@@ -265,8 +290,8 @@ test  <- join_base(test)
 
 # NA handling (data.table :=)
 na_to0 <- c("onpromotion","dcoilwtico","is_holiday","transactions")
-train[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
-test[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
+fill_missing_zero(train, na_to0, "train")
+fill_missing_zero(test, na_to0, "test")
 ```
 
 # 3) EDA: Trend, Seasonality, Missingness
