@@ -1,0 +1,659 @@
+Sweet—here’s a fresh **R Notebook (.Rmd)** with your fixes baked in:
+
+* Ensures `data.table` is active (`setDT()` before any `:=`)
+* Uses `lubridate::wday()` explicitly to avoid masking issues
+* Keeps the rest of the pipeline intact
+
+Copy this into a new file (e.g., `favorita_store_sales_fixed.Rmd`) and Knit.
+
+```yaml
+---
+title: "Kaggle: Store Sales – Time Series Forecasting (Fixed R Notebook)"
+author: "Your Name"
+date: "`r format(Sys.Date())`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(dplyr.summarise.inform = FALSE)
+```
+
+# 0) Setup: Packages & Options
+
+The first step in any reproducible analysis is to load the libraries we
+depend on and establish chunk options that keep the notebook output
+clean. Doing this up front avoids repeated `library()` calls later and
+makes it obvious which packages are required to knit the document.
+
+```{r packages}
+required_packages <- data.frame(
+  package = c(
+    "tidyverse", "data.table", "lubridate", "janitor", "skimr",
+    "tsibble", "feasts", "fable", "forecast",
+    "recipes", "rsample", "yardstick", "ranger"
+  ),
+  min_version = c(
+    "1.3.2", "1.14.10", "1.9.3", "2.2.0", "2.1.5",
+    "1.1.3", "0.3.2", "0.3.4", "8.23.0",
+    "1.0.10", "1.2.0", "1.2.0", "0.15.2"
+  ),
+  stringsAsFactors = FALSE
+)
+
+minimum_r_version <- "4.1.0"
+if (getRversion() < minimum_r_version) {
+  warning(
+    sprintf(
+      "R %s or later is recommended for this notebook; current version is %s.",
+      minimum_r_version,
+      getRversion()
+    )
+  )
+}
+
+cran_repo <- getOption("repos")
+if (
+  is.null(cran_repo) ||
+  identical(cran_repo, structure("@CRAN@", names = "CRAN")) ||
+  identical(unname(cran_repo["CRAN"]), "@CRAN@")
+) {
+  options(repos = c(CRAN = "https://cloud.r-project.org"))
+  message("[setup] CRAN mirror set to https://cloud.r-project.org")
+}
+
+package_report <- required_packages
+package_report$current_version <- NA_character_
+package_report$required_action <- "none"
+package_report$install_status <- "skipped"
+package_report$load_status <- "not attempted"
+
+for (i in seq_len(nrow(required_packages))) {
+  pkg <- required_packages$package[i]
+  min_ver <- required_packages$min_version[i]
+
+  current_version <- tryCatch(
+    as.character(utils::packageVersion(pkg)),
+    error = function(e) NA_character_
+  )
+  package_report$current_version[i] <- current_version
+
+  needs_install <- is.na(current_version)
+  needs_update <- !needs_install && utils::compareVersion(current_version, min_ver) < 0
+
+  if (needs_install) {
+    package_report$required_action[i] <- "install"
+  } else if (needs_update) {
+    package_report$required_action[i] <- "update"
+  } else {
+    package_report$install_status[i] <- "already satisfied"
+  }
+
+  if (needs_install || needs_update) {
+    action <- package_report$required_action[i]
+    installed_label <- if (is.na(current_version)) "none" else current_version
+    message(sprintf(
+      "[setup] Attempting to %s %s (installed: %s, required: %s)",
+      action, pkg, installed_label, min_ver
+    ))
+
+    install_success <- tryCatch(
+      {
+        utils::install.packages(pkg, dependencies = TRUE)
+        TRUE
+      },
+      error = function(e) {
+        message(sprintf("[setup][error] %s failed: %s", pkg, conditionMessage(e)))
+        FALSE
+      }
+    )
+
+    if (install_success) {
+      package_report$install_status[i] <- "success"
+      package_report$current_version[i] <- tryCatch(
+        as.character(utils::packageVersion(pkg)),
+        error = function(e) current_version
+      )
+    } else {
+      package_report$install_status[i] <- "failed"
+      next
+    }
+  }
+
+  load_status <- tryCatch(
+    {
+      suppressPackageStartupMessages(
+        library(pkg, character.only = TRUE)
+      )
+      "loaded"
+    },
+    error = function(e) {
+      message(sprintf("[setup][error] Failed to load %s: %s", pkg, conditionMessage(e)))
+      "load failed"
+    }
+  )
+  package_report$load_status[i] <- load_status
+}
+
+print(package_report, row.names = FALSE)
+
+# Provide a concise summary for the knitting log
+message("[setup] Package installation report:")
+for (i in seq_len(nrow(package_report))) {
+  row <- package_report[i, ]
+  message(sprintf(
+    "  - %s: current=%s | action=%s | install=%s | load=%s",
+    row$package,
+    row$current_version,
+    row$required_action,
+    row$install_status,
+    row$load_status
+  ))
+}
+
+rm(package_report)
+```
+
+
+> Place the competition CSVs in a local folder, e.g., `data/`.
+
+Before importing anything we set a single path variable pointing to the
+directory that holds the Kaggle CSVs. Centralizing the location makes it
+easy to rerun the notebook on a different machine or folder structure by
+changing only one line.
+
+```{r paths}
+path <- "data"  # <-- change if your files live elsewhere
+```
+
+# 1) Load & Inspect Data
+
+With the environment prepared, we load each competition file using
+`data.table::fread()` for speed and immediately convert them to
+data.table objects. Running structural summaries right after import
+verifies column types, catches missing values, and gives a first sense of
+the data volume.
+
+```{r load-inspect}
+train <- fread(file.path(path,"train.csv"))           
+test  <- fread(file.path(path,"test.csv"))            
+stores <- fread(file.path(path,"stores.csv"))         
+oil    <- fread(file.path(path,"oil.csv"))            
+hol    <- fread(file.path(path,"holidays_events.csv"))
+trans  <- fread(file.path(path,"transactions.csv"))
+
+# Ensure data.table semantics are active BEFORE using :=
+setDT(train); setDT(test); setDT(stores); setDT(oil); setDT(hol); setDT(trans)
+
+str(train); str(test)
+skimr::skim(as.data.frame(train))
+```
+
+# 2) Cleaning & Safe Joins (No Leakage)
+
+To avoid subtle leakage we normalize all key tables before merging:
+standardizing date formats, preparing holiday flags, smoothing oil
+prices, and aggregating transactions. These curated tables are the
+foundation for feature engineering and keep the joins strictly
+time-aligned.
+
+```{r clean-join}
+# Parse dates with data.table :=
+train[, date := as.Date(date)]
+test[,  date := as.Date(date)]
+oil[,   date := as.Date(date)]
+hol[,   date := as.Date(date)]
+trans[, date := as.Date(date)]
+
+# Holidays: simple signal with transferred handled
+hol_clean <- as_tibble(hol) %>%
+  mutate(is_transferred = if_else(transferred == "True", 1L, 0L, missing = 0L),
+         is_holiday     = if_else(is_transferred == 1L, 0L, 1L, missing = 0L)) %>%
+  group_by(date) %>%
+  summarise(is_holiday = as.integer(any(is_holiday == 1L)), .groups = "drop")
+
+stopifnot(nrow(hol_clean) == dplyr::n_distinct(hol_clean$date))
+
+# Oil: forward-fill gaps
+oil_full <- tibble(date = seq(min(oil$date), max(oil$date), by = "day")) %>%
+  left_join(as_tibble(oil), by = "date") %>%
+  arrange(date) %>%
+  tidyr::fill(dcoilwtico, .direction = "down")
+
+oil_u <- oil_full %>% distinct(date, .keep_all = TRUE)
+
+stopifnot(nrow(oil_u) == dplyr::n_distinct(oil_u$date))
+
+trans_u <- as_tibble(trans) %>%
+  group_by(date, store_nbr) %>%
+  summarise(transactions = sum(transactions, na.rm = TRUE), .groups = "drop")
+
+stopifnot(nrow(trans_u) == dplyr::n_distinct(trans_u$date, trans_u$store_nbr))
+
+stores_u <- as_tibble(stores) %>% distinct(store_nbr, .keep_all = TRUE)
+
+stopifnot(nrow(stores_u) == dplyr::n_distinct(stores_u$store_nbr))
+
+# Join helper (use tibbles to join, then back to data.table)
+join_base <- function(df_dt) {
+  df <- as_tibble(df_dt) %>%
+    left_join(stores_u, by = "store_nbr", relationship = "many-to-one") %>%
+    left_join(oil_u, by = "date", relationship = "many-to-one") %>%
+    left_join(hol_clean, by = "date", relationship = "many-to-one") %>%
+    left_join(trans_u, by = c("date","store_nbr"), relationship = "many-to-one") %>%
+    clean_names()
+  setDT(df)  # return as data.table
+  df
+}
+
+train <- join_base(train)
+test  <- join_base(test)
+
+# NA handling (data.table :=)
+na_to0 <- c("onpromotion","dcoilwtico","is_holiday","transactions")
+train[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
+test[,(na_to0) := lapply(.SD, \(x) fifelse(is.na(x), 0, x)), .SDcols = na_to0]
+```
+
+# 3) EDA: Trend, Seasonality, Missingness
+
+Before engineering features we visualize aggregate trends, day-of-week
+seasonality, and missing values. These plots ground the modeling choices
+by confirming recurring weekly patterns and identifying any data quality
+issues that need to be addressed.
+
+```{r eda}
+# Overall trend
+as_tibble(train) %>%
+  group_by(date) %>%
+  summarise(sales = sum(sales, na.rm=TRUE), .groups = "drop") %>%
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  labs(title="Total Sales Over Time", x = NULL, y = "Sales")
+
+# Day-of-week seasonality (explicitly call lubridate::wday to avoid masking)
+as_tibble(train) %>%
+  mutate(dow = lubridate::wday(date, label = TRUE)) %>%
+  group_by(dow) %>%
+  summarise(avg_sales = mean(sales, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(dow, avg_sales)) + 
+  geom_col() + 
+  labs(title="Average Sales by Day of Week", x = NULL, y = "Avg Sales")
+
+# Missing values snapshot
+sapply(train, \(x) sum(is.na(x)))
+```
+
+# 4) Feature Engineering (Date Parts, Lags, Rollings)
+
+The seasonal dynamics of grocery sales are driven by both calendar
+effects and recent history. We therefore add explicit date parts along
+with per-series lag and rolling statistics so downstream models can learn
+about weekly cycles and recent momentum.
+
+```{r features}
+# Add date parts & categorical encodings
+make_features <- function(DT) {
+  DT[, `:=`(
+    year = lubridate::year(date),
+    month = lubridate::month(date),
+    mday = lubridate::mday(date),
+    wday = lubridate::wday(date),                  # numeric 1..7
+    week = lubridate::isoweek(date)
+  )]
+  DT[, is_weekend := as.integer(wday %in% c(1L, 7L))]
+  # Convert to factors for recipe encoding later (keep as columns)
+  DT[, `:=`(
+    fam = as.factor(family),
+    city = as.factor(city),
+    state = as.factor(state),
+    type = as.factor(type),
+    cluster = as.factor(cluster)
+  )]
+  invisible(DT)
+}
+
+make_features(train)
+make_features(test)
+
+# Lags & rolling stats per (store_nbr, family)
+setkey(train, store_nbr, family, date)
+
+train[, `:=`(
+  lag7  = shift(sales, 7),
+  lag14 = shift(sales, 14),
+  lag28 = shift(sales, 28),
+  roll7  = frollmean(shift(sales,1), 7,  na.rm=TRUE),
+  roll28 = frollmean(shift(sales,1), 28, na.rm=TRUE),
+  roll56 = frollmean(shift(sales,1), 56, na.rm=TRUE)
+), by = .(store_nbr, family)]
+```
+
+Each lag/rolling feature is scoped to a single `(store_nbr, family)` so
+the model learns from store-specific history. The lags (`lag7`, `lag14`,
+`lag28`) reference prior days exactly one week, two weeks, and four weeks
+back, while the roll columns compute trailing averages over the previous
+7, 28, or 56 days (after shifting by one day to avoid peeking at the
+current target). This makes weekly cadence and medium/long-term momentum
+explicit for downstream models without introducing leakage.
+
+# 5) Time-Based Validation Split
+
+Rather than shuffling observations we carve out the final 16 days as a
+validation window to mimic the competition horizon. This time-respecting
+split provides a realistic check on how the model will perform on the
+future dates we ultimately need to forecast.
+
+```{r split}
+H <- 16  # horizon
+max_train_date <- max(train$date)
+valid_start <- max_train_date - lubridate::days(H-1)
+
+train_fit <- train[date <  valid_start]
+valid_fit <- train[date >= valid_start]
+
+list(train_rows = nrow(train_fit), valid_rows = nrow(valid_fit))
+```
+
+# 6) Global Supervised Model: Random Forest (with Recipe)
+
+With engineered features in place, we move to a global model that can
+share information across all stores and product families. We start by
+selecting engineered predictors, log-transforming the target, and setting
+up a `{recipes}` pipeline so the preprocessing is reproducible.
+
+```{r ml-prep}
+model_cols <- c("onpromotion","dcoilwtico","is_holiday","transactions",
+                "year","month","mday","wday","week","is_weekend",
+                "lag7","lag14","lag28","roll7","roll28","roll56",
+                "store_nbr","family","city","state","type","cluster")
+
+model_df <- as_tibble(train) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+rec <- recipe(y ~ ., data = model_df) %>%
+  step_string2factor(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+prep_rec <- prep(rec)
+
+train_ids <- as_tibble(train_fit) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+valid_ids <- as_tibble(valid_fit) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+train_processed <- bake(prep_rec, new_data = train_ids)
+valid_processed <- bake(prep_rec, new_data = valid_ids)
+```
+
+After baking the recipe we train a random forest with `{ranger}` and
+evaluate its validation RMSE. Tree ensembles remain robust to nonlinear
+relationships in the engineered feature space while providing fast
+training and strong baselines.
+
+```{r rf-train}
+set.seed(42)
+num_trees <- 30
+mtry_val <- floor(sqrt(ncol(train_processed) - 1))
+min_node <- 5
+sample_frac <- 0.8
+rf_fit <- ranger(
+  formula = y ~ .,
+  data = train_processed,
+  num.trees = num_trees,
+  mtry = mtry_val,
+  min.node.size = min_node,
+  sample.fraction = sample_frac,
+  respect.unordered.factors = "order",
+  importance = "permutation", 
+  write.forest = TRUE
+)
+
+pred_valid <- predict(rf_fit, data = valid_processed)$predictions
+val_rmse <- yardstick::rmse_vec(
+  truth = valid_processed$y,
+  estimate = pred_valid
+)
+val_rmse
+```
+
+This random forest pass serves two purposes: (1) it establishes a global
+supervised benchmark that blends recent lags, promotions, and store
+metadata, and (2) it yields permutation importances we rely on for
+feature screening. Running it once up front is therefore justified, even
+though we train another forest later—the second fit uses a pruned feature
+set derived from these importances rather than duplicating work.
+
+To better understand which engineered signals drive the forest, we log
+the permutation-based variable importance from `ranger`. The resulting
+table ranks every predictor so we can focus on the most informative ones
+(e.g., the strongest rolling statistics such as `roll7`/`roll5`).
+
+```{r rf-importance}
+importance_tbl <- enframe(
+  rf_fit$variable.importance,
+  name = "predictor",
+  value = "importance"
+) %>%
+  arrange(desc(importance)) %>%
+  mutate(rank = row_number())
+
+top_k_predictors <- 12
+important_predictors <- importance_tbl %>%
+  slice_head(n = top_k_predictors) %>%
+  pull(predictor)
+
+importance_tbl %>%
+  mutate(
+    pct_of_top = importance / max(importance),
+    pct_of_top = sprintf("%0.1f%%", pct_of_top * 100)
+  ) %>%
+  select(rank, predictor, importance, pct_of_top) %>%
+  knitr::kable(
+    col.names = c("Rank", "Predictor", "Permutation importance", "% of top signal"),
+    caption = sprintf("Variable importance ranked across all %s engineered predictors", nrow(importance_tbl))
+  )
+```
+
+Rather than feeding the forest all engineered features, we can retrain
+with only the highest-ranked predictors. This trims the feature matrix,
+which typically reduces training time and may marginally improve
+generalization if noisy predictors are dropped. Below we keep the top 12
+signals surfaced in the ranking step and benchmark their validation
+RMSE.
+
+```{r rf-top-train}
+train_top_processed <- train_processed %>% select(y, all_of(important_predictors))
+valid_top_processed <- valid_processed %>% select(y, all_of(important_predictors))
+
+set.seed(42)
+rf_top_fit <- ranger(
+  formula = y ~ .,
+  data = train_top_processed,
+  num.trees = num_trees/2,
+  mtry = floor(sqrt(length(important_predictors))),
+  min.node.size = min_node,
+  sample.fraction = sample_frac,
+  respect.unordered.factors = "order",
+  importance = "permutation",
+  write.forest = TRUE
+)
+
+pred_valid_top <- predict(rf_top_fit, data = valid_top_processed)$predictions
+val_rmse_top <- yardstick::rmse_vec(
+  truth = valid_top_processed$y,
+  estimate = pred_valid_top
+)
+
+tibble(
+  model = c("All predictors", sprintf("Top %s predictors", top_k_predictors)),
+  RMSE = c(val_rmse, val_rmse_top)
+)
+```
+
+We keep only the top-ranked predictor configuration for downstream work.
+The "all predictors" RMSE is retained purely for documentation so future
+contributors can see the lift from feature selection; the production path
+continues exclusively with the `Top k` forest, avoiding redundant model
+variants at prediction time.
+
+To visualize how the trimmed forest tracks the held-out horizon, we plot
+the validation window's actual sales against the model's predictions.
+Aggregating to daily totals smooths the line plot while still showing any
+systematic bias over time.
+
+```{r rf-validation-plot, fig.height=4.5}
+validation_plot <- valid_fit %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  as_tibble() %>%
+  transmute(
+    date,
+    actual = sales,
+    prediction = expm1(pred_valid_top)
+  ) %>%
+  group_by(date) %>%
+  summarise(across(c(actual, prediction), sum), .groups = "drop") %>%
+  pivot_longer(c(actual, prediction), names_to = "series", values_to = "sales")
+
+validation_plot %>%
+  ggplot(aes(x = date, y = sales, color = series)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Validation window: actual vs. Random Forest prediction",
+    x = "Date",
+    y = "Daily sales"
+  ) +
+  scale_color_manual(values = c(actual = "#1b9e77", prediction = "#d95f02")) +
+  theme_minimal()
+```
+
+### Avoiding `mem.maxVSize()` errors
+
+Training on thousands of `(store, family)` slices plus dozens of engineered
+lags can exhaust the default vector heap, especially on Windows where R caps
+`mem.maxVSize()` at 16 GB. The following guardrails keep the workflow within
+that budget:
+
+* Keep only the strongest predictors (`important_predictors`) when training or
+  refitting, which we now do automatically.
+* Release heavy intermediate objects as soon as they are no longer required and
+  trigger garbage collection.
+* If you still approach the 16 GB ceiling, raise the vector heap limit **before
+  launching R** by setting `R_MAX_VSIZE` in `~/.Renviron` (example below).
+* As a last resort, trim `num.trees` or lower `sample_frac` to shrink the
+  in-memory forest footprint.
+
+```{r rf-cleanup, results='hide'}
+rm(train_processed, valid_processed, train_top_processed, valid_top_processed)
+gc()
+```
+
+
+# 7) Refit on Full Train & Prepare Test Features
+
+Once satisfied with validation performance we refit on all available
+training data. We copy forward the most recent lagged values for each
+store-family pair so the model receives familiar inputs when generating
+predictions for the unseen test dates.
+
+```{r test-features}
+# Carry forward last known lag/rolling stats per (store, family)
+last_train_feats <- as_tibble(train) %>%
+  arrange(store_nbr, family, date) %>%
+  group_by(store_nbr, family) %>%
+  summarise(
+    lag7_last  = dplyr::last(lag7,  order_by = date),
+    lag14_last = dplyr::last(lag14, order_by = date),
+    lag28_last = dplyr::last(lag28, order_by = date),
+    roll7_last  = dplyr::last(roll7,  order_by = date),
+    roll28_last = dplyr::last(roll28, order_by = date),
+    roll56_last = dplyr::last(roll56, order_by = date),
+    .groups = "drop"
+  ) %>% setDT()
+
+test2 <- copy(test)
+test2 <- merge(test2, last_train_feats, by = c("store_nbr","family"), all.x = TRUE)
+test2[, `:=`(
+  lag7  = lag7_last,  lag14 = lag14_last,  lag28 = lag28_last,
+  roll7 = roll7_last, roll28 = roll28_last, roll56 = roll56_last
+)]
+test2[, c("lag7_last","lag14_last","lag28_last","roll7_last","roll28_last","roll56_last") := NULL]
+
+# Same recipe processing
+test_baked <- bake(prep_rec, new_data = as_tibble(test2))
+
+# Refit on all usable training data
+train_all <- as_tibble(train) %>%
+  filter(!is.na(lag7), !is.na(lag14), !is.na(lag28)) %>%
+  mutate(y = log1p(sales)) %>%
+  select(y, all_of(model_cols))
+
+train_all_processed <- bake(prep_rec, new_data = train_all)
+
+train_all_top <- train_all_processed %>% select(y, all_of(important_predictors))
+test_top <- test_baked %>% select(all_of(important_predictors))
+
+rf_final <- ranger(
+  formula = y ~ .,
+  data = train_all_top,
+  num.trees = num_trees/2,
+  mtry = floor(sqrt(length(important_predictors))),
+  min.node.size = min_node,
+  sample.fraction = 1,
+  respect.unordered.factors = "order",
+  seed = 42
+)
+
+pred_test_log <- predict(rf_final, data = test_top)$predictions
+pred_test <- pmax(0, expm1(pred_test_log))
+```
+
+Refitting the trimmed forest on all available history is the final model
+usage, and it is required to translate the validated approach into a
+submission-ready forecast. We deliberately skip training any other
+full-data models so the pipeline remains single-tracked from this point
+forward.
+
+# 8) Submission CSV
+
+The last modeling step is to pair the predictions with their Kaggle ids
+and save a submission file. Automating this export inside the notebook
+ensures that anyone knitting the document can reproduce the exact CSV
+used for leaderboard scoring.
+
+```{r submission}
+submission <- as_tibble(test) %>%
+  select(id) %>%
+  mutate(sales = pred_test)
+
+fwrite(submission, "submission.csv")
+submission %>% head()
+```
+
+# 9) Iterate & Improve
+
+* Verify CV design (e.g., `rsample::rolling_origin`) to match the 16-day horizon.
+* Add richer holiday features (national vs regional, pre/post-holiday flags), family-specific models, or recursive lags for multi-step forecasting.
+* Consider stacking tree ensembles or trying `{lightgbm}` / `{catboost}`.
+
+---
+
+If you want, I can also add a **rolling-origin CV** chunk so you can compare multiple folds automatically.
