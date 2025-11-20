@@ -436,6 +436,14 @@ build_preprocessor <- function(train_predictors) {
     data = scaled_train,
     na.action = stats::na.pass
   )
+
+  na_dropped <- attr(train_design, "na.action")
+  if (!is.null(na_dropped)) {
+    full_design <- matrix(NA_real_, nrow = nrow(train_predictors), ncol = ncol(train_design))
+    full_design[-na_dropped, ] <- train_design
+    colnames(full_design) <- colnames(train_design)
+    train_design <- full_design
+  }
   col_var <- apply(train_design, 2, stats::var, na.rm = TRUE)
   keep_cols <- names(col_var)[col_var > 0]
 
@@ -459,6 +467,13 @@ apply_preprocessor <- function(df, preproc) {
     data = df_mod,
     na.action = stats::na.pass
   )
+  na_dropped <- attr(design, "na.action")
+  if (!is.null(na_dropped)) {
+    full_design <- matrix(NA_real_, nrow = nrow(df_mod), ncol = ncol(design))
+    full_design[-na_dropped, ] <- design
+    colnames(full_design) <- colnames(design)
+    design <- full_design
+  }
   design <- design[, preproc$keep_cols, drop = FALSE]
 
   out <- as_tibble(design)
