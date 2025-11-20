@@ -488,7 +488,7 @@ set.seed(42)
 rf_top_fit <- ranger(
   formula = y ~ .,
   data = train_top_processed,
-  num.trees = num_trees,
+  num.trees = num_trees/2,
   mtry = floor(sqrt(length(important_predictors))),
   min.node.size = min_node,
   sample.fraction = sample_frac,
@@ -614,7 +614,7 @@ test_top <- test_baked %>% select(all_of(important_predictors))
 rf_final <- ranger(
   formula = y ~ .,
   data = train_all_top,
-  num.trees = num_trees,
+  num.trees = num_trees/2,
   mtry = floor(sqrt(length(important_predictors))),
   min.node.size = min_node,
   sample.fraction = 1,
