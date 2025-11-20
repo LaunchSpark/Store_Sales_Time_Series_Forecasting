@@ -237,8 +237,8 @@ trans_u <- as.data.table(trans)[
   , .(transactions = sum(transactions, na.rm = TRUE)), by = .(date, store_nbr)
 ]
 
-setkey(trans_u, date, store_nbr)
-stopifnot(nrow(trans_u) == trans_u[, uniqueN(date, store_nbr)])
+  setkey(trans_u, date, store_nbr)
+  stopifnot(nrow(trans_u) == uniqueN(trans_u, by = c("date", "store_nbr")))
 
 stores_u <- as.data.table(stores)[, .SD[1], by = store_nbr]
 
