@@ -437,6 +437,9 @@ build_preprocessor <- function(train_predictors) {
     na.action = stats::na.pass
   )
 
+  clean_feature_names <- function(nms) make.names(nms, unique = TRUE)
+  colnames(train_design) <- clean_feature_names(colnames(train_design))
+
   na_dropped <- attr(train_design, "na.action")
   if (!is.null(na_dropped)) {
     full_design <- matrix(NA_real_, nrow = nrow(train_predictors), ncol = ncol(train_design))
@@ -448,6 +451,7 @@ build_preprocessor <- function(train_predictors) {
   keep_cols <- names(col_var)[col_var > 0]
 
   list(
+    feature_names = colnames(train_design),
     cat_levels = lapply(train_factors[categorical_cols], levels),
     numeric_means = numeric_means,
     numeric_sds = numeric_sds,
@@ -467,6 +471,10 @@ apply_preprocessor <- function(df, preproc) {
     data = df_mod,
     na.action = stats::na.pass
   )
+
+  colnames(design) <- make.names(colnames(design), unique = TRUE)
+  design <- design[, preproc$feature_names, drop = FALSE]
+
   if (nrow(design) != nrow(df_mod)) {
     row_index <- suppressWarnings(as.integer(rownames(design)))
     full_design <- matrix(NA_real_, nrow = nrow(df_mod), ncol = ncol(design))
