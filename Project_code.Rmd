@@ -431,8 +431,12 @@ build_preprocessor <- function(train_predictors) {
   scaled_train <- train_factors %>%
     mutate(across(all_of(numeric_keep), ~ (.x - numeric_means[cur_column()]) / numeric_sds[cur_column()]))
 
-  train_design <- model.matrix(feature_formula, data = scaled_train)
-  col_var <- apply(train_design, 2, stats::var)
+  train_design <- model.matrix(
+    feature_formula,
+    data = scaled_train,
+    na.action = stats::na.pass
+  )
+  col_var <- apply(train_design, 2, stats::var, na.rm = TRUE)
   keep_cols <- names(col_var)[col_var > 0]
 
   list(
@@ -450,7 +454,11 @@ apply_preprocessor <- function(df, preproc) {
     mutate(across(all_of(preproc$numeric_keep), ~ (.x - preproc$numeric_means[cur_column()]) / preproc$numeric_sds[cur_column()])) %>%
     mutate(across(all_of(categorical_cols), ~ factor(.x, levels = preproc$cat_levels[[cur_column()]])))
 
-  design <- model.matrix(preproc$feature_formula, data = df_mod)
+  design <- model.matrix(
+    preproc$feature_formula,
+    data = df_mod,
+    na.action = stats::na.pass
+  )
   design <- design[, preproc$keep_cols, drop = FALSE]
 
   out <- as_tibble(design)
