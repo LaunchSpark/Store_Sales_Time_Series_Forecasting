@@ -639,6 +639,15 @@ that budget:
 * As a last resort, trim `num.trees` or lower `sample_frac` to shrink the
   in-memory forest footprint.
 
+Establish a baseline for us to compare against
+```{r baseline}
+baseline_predictor <- mean(train_processed$y, na.rm = TRUE)
+baseline_rmse <- yardstick::rmse_vec(truth = valid_processed$y, estimate = rep(baseline_predictor, nrow(valid_processed))
+)
+                                    
+                                  
+```
+
 ```{r rf-cleanup, results='hide'}
 cleanup_objects <- c(
   "train_processed", "valid_processed", "train_top_processed", "valid_top_processed",
@@ -658,6 +667,8 @@ store-family pair so the model receives familiar inputs when generating
 predictions for the unseen test dates. The same preprocessing helpers
 reuse training-set factor levels and scaling statistics to keep the
 encoded columns aligned for the refit and test scoring.
+
+
 
 ```{r test-features}
 # Carry forward last known lag/rolling stats per (store, family)
@@ -717,6 +728,9 @@ submission-ready forecast. We deliberately skip training any other
 full-data models so the pipeline remains single-tracked from this point
 forward.
 
+
+
+
 # 8) Submission CSV
 
 The last modeling step is to pair the predictions with their Kaggle ids
@@ -725,20 +739,21 @@ ensures that anyone knitting the document can reproduce the exact CSV
 used for leaderboard scoring.
 
 ```{r submission}
+
 submission <- as_tibble(test) %>%
   select(id) %>%
   mutate(sales = pred_test)
 
 fwrite(submission, "submission.csv")
 submission %>% head()
+
+
+print('Baseline RMSE')
+baseline_rmse
+print('Computed RMSE')
+val_rmse
+print('Top RMSE')
+val_rmse_top
+
 ```
 
-# 9) Iterate & Improve
-
-* Verify CV design (e.g., `rsample::rolling_origin`) to match the 16-day horizon.
-* Add richer holiday features (national vs regional, pre/post-holiday flags), family-specific models, or recursive lags for multi-step forecasting.
-* Consider stacking tree ensembles or trying `{lightgbm}` / `{catboost}`.
-
----
-
-If you want, I can also add a **rolling-origin CV** chunk so you can compare multiple folds automatically.
